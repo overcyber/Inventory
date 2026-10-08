@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 
 from flask import current_app
 
-from models import HostInventory, Group
-from utils.machine_handler import process_machine_data, get_machine_fallback
+from models import Group
+from utils.machine_handler import get_machine_fallback
 from utils import cache as shared_cache
 
 CACHE_TIMEOUT = 40
@@ -79,35 +79,14 @@ def get_machine_stats(machines):
     }
 
 def get_all_machines():
-    app = current_app._get_current_object()
-    # Asset Core is canonical from v0.19. Legacy HostInventory remains a
-    # transparent fallback while an existing installation is being migrated.
+    app=current_app._get_current_object()
     try:
-        from models import Asset
-        if Asset.query.filter_by(active=True).first() is not None:
-            from services.asset_core import list_machine_views
-            machines = list_machine_views(active_only=True)
-            app.logger.info(
-                f"[Dashboard] Carregados {len(machines)} ativos do Asset Core.")
-            return machines
-    except Exception as e:
-        app.logger.warning(f"[Dashboard] Asset Core indisponível; usando legado: {e}")
-
-    try:
-        hosts = HostInventory.query.filter_by(is_legacy=False).all()
-        machines_list = []
-        for h in hosts:
-            try:
-                processed = process_machine_data(h.data)
-                if processed:
-                    machines_list.append(processed)
-            except Exception as e:
-                app.logger.error(f"Erro ao processar máquina: {e}")
-        app.logger.info(
-            f"[Dashboard] Carregados {len(machines_list)} hosts legados do banco.")
-        return machines_list
-    except Exception as e:
-        app.logger.error(f"Erro fatal ao buscar máquinas do banco: {e}")
+        from services.asset_core import list_machine_views
+        machines=list_machine_views(active_only=True)
+        app.logger.info(f'[Dashboard] Carregados {len(machines)} ativos do Asset Core.')
+        return machines
+    except Exception as exc:
+        app.logger.error(f'[Dashboard] Falha ao consultar Asset Core: {exc}')
         return []
 
 def get_cached_machines():

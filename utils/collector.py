@@ -272,28 +272,28 @@ def _sync_wazuh_only(app):
                     found_agent_ids.append(agent_id)
                     found_hostnames.append(hostname)
 
-                    registro = HostInventory.query.filter_by(hostname=hostname).first()
-                    if registro:
-                        registro.data = payload
-                        registro.is_legacy = False
-                        registro.last_updated = datetime.utcnow()
-                    else:
-                        db.session.add(HostInventory(hostname=hostname, data=payload, is_legacy=False))
-                    db.session.flush()
-                    try:
-                        from services.asset_core import ingest_wazuh_payload
-                        ingest_wazuh_payload(hostname, payload, str(agent_id or ''))
-                    except Exception as asset_exc:
-                        logger.error(f"[AssetCore] Falha ao normalizar {hostname}: {asset_exc}")
+                    from services.asset_core import ingest_wazuh_payload
+                    ingest_wazuh_payload(hostname, payload, str(agent_id or ''))
+                    if _env_bool('LEGACY_HOST_MIRROR', False):
+                        registro = HostInventory.query.filter_by(hostname=hostname).first()
+                        if registro:
+                            registro.data = payload
+                            registro.is_legacy = False
+                            registro.last_updated = datetime.utcnow()
+                        else:
+                            db.session.add(HostInventory(hostname=hostname, data=payload, is_legacy=False))
+                        db.session.commit()
                     processed_count += 1
                 except Exception as e:
                     error_count += 1
                     logger.error(f"[Coletor] Erro ao processar detalhe de agente: {e}")
 
         try:
-            unseen_hosts = HostInventory.query.filter(~HostInventory.hostname.in_(found_hostnames), HostInventory.is_legacy == False).all()
-            for h in unseen_hosts:
-                h.is_legacy = True
+            unseen_hosts = []
+            if _env_bool('LEGACY_HOST_MIRROR', False):
+                unseen_hosts = HostInventory.query.filter(~HostInventory.hostname.in_(found_hostnames), HostInventory.is_legacy == False).all()
+                for h in unseen_hosts:
+                    h.is_legacy = True
 
             unseen_groups = Group.query.filter(~Group.name.in_(found_groups), Group.is_legacy == False).all()
             for g in unseen_groups:

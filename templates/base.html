@@ -30,7 +30,7 @@
     <script src="{{ url_for('static', filename='js/theme.js') }}" defer></script>
     {% block extra_css %}{% endblock %}
 
-</head>
+    <script src="{{ url_for('static', filename='js/csrf.js') }}" defer></script>\n</head>
 <body class="{% block body_class %}{% endblock %}">
 
     <div id="splash-screen" role="status" aria-live="polite">

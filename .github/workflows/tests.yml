@@ -8,6 +8,39 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: inventory_test
+          POSTGRES_PASSWORD: inventory_test_password
+          POSTGRES_DB: inventory_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U inventory_test -d inventory_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DB_USER: inventory_test
+      DB_PASS: inventory_test_password
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_NAME: inventory_test
+      REDIS_URL: redis://127.0.0.1:6379/15
+      SECRET_KEY: test-secret-key-0123456789abcdef0123456789abcdef
+      SESSION_SALT: test-session-salt-0123456789abcdef
+      ADMIN_PASSWORD: TestAdmin-ChangeMe-9842
+      ADMIN_MUST_CHANGE_PASSWORD: "false"
+      USE_HTTPS: "false"
+      WAZUH_ENABLED: "false"
+      NETSCOPE_BACKGROUND_ENABLED: "false"
+      INVENTORY_SCHEDULER_ENABLED: "false"
+      ASSET_BACKFILL_LEGACY: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,5 +48,18 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements-dev.txt
-      - run: python -m compileall -q .
-      - run: pytest
+      - name: Compile Python
+        run: python -m compileall -q .
+      - name: Migrate clean PostgreSQL
+        run: alembic upgrade head
+      - name: Validate migration idempotency
+        run: alembic upgrade head
+      - name: Validate Docker Compose
+        env:
+          DB_PASS: inventory_test_password
+        run: |
+          cp .env.example .env
+          printf "\nDB_PASS=inventory_test_password\n" >> .env
+          docker compose config --quiet
+      - name: Run tests
+        run: pytest

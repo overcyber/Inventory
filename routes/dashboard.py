@@ -14,6 +14,7 @@ ROUTES = [
     ('/dashboard', 'dashboard', 'dashboard', {}),
     ('/get_chart_data', 'get_chart_data', 'get_chart_data', {}),
     ('/health', 'health', 'health', {}),
+    ('/ready', 'ready', 'ready', {}),
 ]
 
 def _app():
@@ -75,14 +76,29 @@ def get_chart_data():
         app.logger.error(f"Erro crítico em /get_chart_data: {e}")
         return jsonify({'error': str(e), 'os_labels': [], 'os_data': []}), 500
 
-def health():
-
-    from utils import cache as shared_cache
+def _health_payload():
     from datetime import datetime
-    return jsonify({
-        'status': 'ok',
-        'app': 'inventory',
-        'version': APP_VERSION,
-        'cache': shared_cache.ping(),
-        'time': datetime.now().isoformat(timespec='seconds'),
-    })
+    from sqlalchemy import text
+    from models import AssetOutbox, db
+    from utils import cache as shared_cache
+    db_ok=True; db_error=''
+    try:
+        db.session.execute(text('SELECT 1'))
+    except Exception as exc:
+        db.session.rollback(); db_ok=False; db_error=str(exc)
+    try:
+        pending=AssetOutbox.query.filter(AssetOutbox.status.in_(('pending','retry','processing'))).count() if db_ok else None
+    except Exception:
+        pending=None
+    return {'status':'ok' if db_ok else 'degraded','app':'inventory',
+            'version':APP_VERSION,'database':{'ok':db_ok,'error':db_error[:500]},
+            'cache':shared_cache.ping(),'outbox_pending':pending,
+            'time':datetime.now().isoformat(timespec='seconds')}
+
+def health():
+    payload=_health_payload()
+    return jsonify(payload),200 if payload['database']['ok'] else 503
+
+def ready():
+    payload=_health_payload()
+    return jsonify(payload),200 if payload['database']['ok'] else 503

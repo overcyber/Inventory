@@ -4,12 +4,13 @@ from __future__ import annotations
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
 
 from core.security import login_required
-from services.stats import get_cached_machines, get_machine_fallback
+from services.stats import get_cached_machines
 
 ROUTES = [
     ('/painel', 'painel', 'painel', {}),
     ('/search', 'search', 'search', {}),
     ('/machine/<hostname>', 'machine_details', 'machine_details', {}),
+    ('/asset/<asset_uuid>', 'asset_details', 'asset_details', {}),
 ]
 
 @login_required
@@ -235,10 +236,18 @@ def machine_details(hostname):
     machine = _find_machine(machines, hostname)
 
     if not machine:
-        machine = get_machine_fallback(hostname)
-
-    if not machine:
         flash('Máquina não encontrada', 'error')
         return redirect(url_for('painel'))
 
     return render_template('machine_details.html', machine=machine)
+
+
+@login_required
+def asset_details(asset_uuid):
+    from models import Asset
+    from services.asset_core import asset_to_machine
+    asset=Asset.query.filter_by(asset_uuid=asset_uuid).first()
+    if not asset:
+        flash('Ativo não encontrado','error')
+        return redirect(url_for('painel'))
+    return render_template('machine_details.html',machine=asset_to_machine(asset))

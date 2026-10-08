@@ -135,9 +135,6 @@ class Asset(db.Model):
 
 class AssetIdentifier(db.Model):
     __tablename__ = 'asset_identifiers'
-    __table_args__ = (
-        UniqueConstraint('kind', 'value', name='uq_asset_identifier_kind_value'),
-    )
     id = db.Column(db.Integer, primary_key=True)
     asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
                          nullable=False, index=True)
@@ -193,9 +190,10 @@ class AssetChange(db.Model):
 
 class AssetAddress(db.Model):
     __tablename__ = 'asset_addresses'
-    __table_args__ = (UniqueConstraint('asset_id', 'address', 'source',
-                                       name='uq_asset_address_source'),)
     id = db.Column(db.BigInteger, primary_key=True)
+    entity_key = db.Column(db.String(128), nullable=False, default='', index=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    valid_to = db.Column(db.DateTime, nullable=True)
     asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
                          nullable=False, index=True)
     address = db.Column(db.String(128), nullable=False, index=True)
@@ -209,6 +207,11 @@ class AssetAddress(db.Model):
 class AssetInterface(db.Model):
     __tablename__ = 'asset_interfaces'
     id = db.Column(db.BigInteger, primary_key=True)
+    entity_key = db.Column(db.String(128), nullable=False, default='', index=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    valid_to = db.Column(db.DateTime, nullable=True)
     asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
                          nullable=False, index=True)
     name = db.Column(db.String(128), nullable=False, default='')
@@ -223,6 +226,11 @@ class AssetInterface(db.Model):
 class AssetHardware(db.Model):
     __tablename__ = 'asset_hardware'
     id = db.Column(db.BigInteger, primary_key=True)
+    entity_key = db.Column(db.String(128), nullable=False, default='', index=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    valid_to = db.Column(db.DateTime, nullable=True)
     asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
                          nullable=False, index=True)
     source = db.Column(db.String(64), nullable=False, index=True)
@@ -236,6 +244,9 @@ class AssetHardware(db.Model):
 class AssetSoftware(db.Model):
     __tablename__ = 'asset_software'
     id = db.Column(db.BigInteger, primary_key=True)
+    entity_key = db.Column(db.String(128), nullable=False, default='', index=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    valid_to = db.Column(db.DateTime, nullable=True)
     asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
                          nullable=False, index=True)
     source = db.Column(db.String(64), nullable=False, index=True)
@@ -250,6 +261,11 @@ class AssetSoftware(db.Model):
 class AssetProcess(db.Model):
     __tablename__ = 'asset_processes'
     id = db.Column(db.BigInteger, primary_key=True)
+    entity_key = db.Column(db.String(128), nullable=False, default='', index=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    valid_to = db.Column(db.DateTime, nullable=True)
     asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
                          nullable=False, index=True)
     source = db.Column(db.String(64), nullable=False, index=True)
@@ -263,6 +279,11 @@ class AssetProcess(db.Model):
 class AssetService(db.Model):
     __tablename__ = 'asset_services'
     id = db.Column(db.BigInteger, primary_key=True)
+    entity_key = db.Column(db.String(128), nullable=False, default='', index=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    valid_to = db.Column(db.DateTime, nullable=True)
     asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
                          nullable=False, index=True)
     source = db.Column(db.String(64), nullable=False, index=True)
@@ -275,6 +296,11 @@ class AssetService(db.Model):
 class AssetPort(db.Model):
     __tablename__ = 'asset_ports'
     id = db.Column(db.BigInteger, primary_key=True)
+    entity_key = db.Column(db.String(128), nullable=False, default='', index=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    valid_to = db.Column(db.DateTime, nullable=True)
     asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
                          nullable=False, index=True)
     source = db.Column(db.String(64), nullable=False, index=True)
@@ -286,6 +312,72 @@ class AssetPort(db.Model):
     pid = db.Column(db.String(32), nullable=False, default='')
 
 
+
+
+class AssetSourceState(db.Model):
+    __tablename__ = 'asset_source_states'
+    __table_args__ = (UniqueConstraint('asset_id','source','external_id',
+                                       name='uq_asset_source_external'),)
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    source = db.Column(db.String(64), nullable=False, index=True)
+    external_id = db.Column(db.String(512), nullable=False, default='', index=True)
+    confidence = db.Column(db.Float, nullable=False, default=0.5)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    observed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    state = db.Column(JSONB, nullable=False, default=dict)
+
+
+class AssetIdentityConflict(db.Model):
+    __tablename__ = 'asset_identity_conflicts'
+    id = db.Column(db.BigInteger, primary_key=True)
+    kind = db.Column(db.String(64), nullable=False, index=True)
+    value = db.Column(db.String(512), nullable=False, index=True)
+    source = db.Column(db.String(64), nullable=False, default='')
+    candidate_asset_ids = db.Column(JSONB, nullable=False, default=list)
+    observed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    resolved = db.Column(db.Boolean, nullable=False, default=False, index=True)
+
+
+class AssetOutbox(db.Model):
+    __tablename__ = 'asset_outbox'
+    id = db.Column(db.BigInteger, primary_key=True)
+    event_uuid = db.Column(db.String(36), nullable=False, unique=True, index=True)
+    topic = db.Column(db.String(255), nullable=False, default='asset.snapshot.v1')
+    event_key = db.Column(db.String(255), nullable=False, default='', index=True)
+    payload = db.Column(JSONB, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    next_attempt_at = db.Column(db.DateTime, nullable=True, index=True)
+    last_error = db.Column(db.Text, nullable=False, default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    published_at = db.Column(db.DateTime, nullable=True)
+
+
+class AssetDeadLetter(db.Model):
+    __tablename__ = 'asset_dead_letters'
+    id = db.Column(db.BigInteger, primary_key=True)
+    event_uuid = db.Column(db.String(36), nullable=False, index=True)
+    topic = db.Column(db.String(255), nullable=False)
+    event_key = db.Column(db.String(255), nullable=False, default='')
+    payload = db.Column(JSONB, nullable=False)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    last_error = db.Column(db.Text, nullable=False, default='')
+    failed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class ApiToken(db.Model):
+    __tablename__ = 'api_tokens'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False, unique=True)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    scopes = db.Column(JSONB, nullable=False, default=list)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    last_used_at = db.Column(db.DateTime, nullable=True)
 
 class InventorySourceState(db.Model):
     __tablename__ = 'inventory_source_states'

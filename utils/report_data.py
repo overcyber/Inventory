@@ -78,19 +78,15 @@ def merge_machines_devices(machines, devices):
 def _build_row(machine, dev):
 
     hostname = (machine or {}).get('hostname') or (dev or {}).get('hostname') or '—'
-    ip = ((machine or {}).get('ip_address')
-          or (dev or {}).get('ip') or '—')
+    ip = ((machine or {}).get('ip_address') or (dev or {}).get('ip') or '—')
     if ip in ('N/A', ''):
         ip = (dev or {}).get('ip') or '—'
 
-    has_agent = bool(machine) or bool(dev and dev.get('has_agent'))
-    if machine and dev:
-        source = 'wazuh+netcope'
-    elif machine:
-        source = 'wazuh'
-    else:
-        source = 'netcope'
-
+    sources = list((machine or {}).get('source') or [])
+    if dev and 'netscope' not in sources:
+        sources.append('netscope')
+    has_agent = bool((machine or {}).get('has_agent')) or bool(dev and dev.get('has_agent'))
+    source = '+'.join(sources) if sources else 'manual'
     agent_exempt = bool(dev and dev.get('agent_exempt') and not has_agent)
 
     return {

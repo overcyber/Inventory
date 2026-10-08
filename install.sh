@@ -46,7 +46,7 @@ command -v apt-get >/dev/null 2>&1 \
   || die "Este script usa apt (Debian/Ubuntu). Instale as dependências manualmente em outra distro."
 
 printf '\n'
-msg "═══ INVENTORY — instalação (v0.19.0) ═══"
+msg "═══ INVENTORY — instalação (v0.20.0) ═══"
 msg "Pasta de destino: $APP_DIR"
 
 msg "[1/9] Dependências do sistema (apt)…"
@@ -189,48 +189,108 @@ for _ in $(seq 1 15); do
 done
 ok "Redis respondendo (cache)"
 
-RUN_CMD="cd '$APP_DIR' && sudo -u $APP_USER .venv/bin/python app.py"
+msg "[8.5/9] Aplicando migrations Alembic…"
+sudo -u "$APP_USER" env $(grep -v '^#' .env | xargs) .venv/bin/alembic upgrade head
+ok "schema atualizado com Alembic"
+
+RUN_CMD="cd '$APP_DIR' && sudo -u $APP_USER .venv/bin/gunicorn --bind 0.0.0.0:$APP_PORT --workers 2 --threads 4 --timeout 120 app:app"
 if [ "$WITH_SERVICE" -eq 1 ] && command -v systemctl >/dev/null 2>&1; then
   msg "[9/9] Serviço systemd (inventory.service)…"
   cat > /etc/systemd/system/inventory.service <<UNIT
 [Unit]
-Description=Inventory Application
-After=network.target docker.service
+Description=Inventory Web
+After=network-online.target docker.service
 Wants=network-online.target docker.service
-
 [Service]
 Type=simple
-WorkingDirectory=/opt/Inventory
-ExecStart=/opt/Inventory/.venv/bin/python /opt/Inventory/app.py
-
-User=inventory
-Group=inventory
-
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+ExecStart=$APP_DIR/.venv/bin/gunicorn --bind 0.0.0.0:$APP_PORT --workers 2 --threads 4 --timeout 120 app:app
+User=$APP_USER
+Group=$APP_GROUP
 Restart=always
 RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=$APP_DIR
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+UNIT
 
+  cat > /etc/systemd/system/inventory-scheduler.service <<UNIT
+[Unit]
+Description=Inventory Source Scheduler
+After=inventory.service
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+ExecStart=$APP_DIR/.venv/bin/python $APP_DIR/scheduler_worker.py
+User=$APP_USER
+Group=$APP_GROUP
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=$APP_DIR
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  cat > /etc/systemd/system/inventory-outbox.service <<UNIT
+[Unit]
+Description=Inventory Event Outbox
+After=inventory.service
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+ExecStart=$APP_DIR/.venv/bin/python $APP_DIR/worker.py
+User=$APP_USER
+Group=$APP_GROUP
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=$APP_DIR
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+  cat > /etc/systemd/system/inventory-discovery.service <<UNIT
+[Unit]
+Description=Inventory NetScope Discovery
+After=network-online.target inventory.service
+Wants=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+ExecStart=$APP_DIR/.venv/bin/python $APP_DIR/discovery_worker.py
+User=$APP_USER
+Group=$APP_GROUP
+Restart=always
+RestartSec=5
 NoNewPrivileges=yes
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
 PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectKernelLogs=yes
-RestrictSUIDSGID=yes
-ReadWritePaths=/opt/Inventory
-
-LimitNOFILE=65536
-StandardOutput=journal
-StandardError=journal
-
+ReadWritePaths=$APP_DIR
 [Install]
 WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
-  systemctl enable inventory.service >/dev/null
-  systemctl restart inventory.service
+  systemctl enable inventory.service inventory-scheduler.service inventory-outbox.service inventory-discovery.service >/dev/null
+  systemctl restart inventory.service inventory-scheduler.service inventory-outbox.service inventory-discovery.service
   sleep 3
   if systemctl is-active --quiet inventory.service; then
     ok "serviço inventory.service ATIVO (inicia no boot)"

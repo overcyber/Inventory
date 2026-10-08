@@ -1,0 +1,18 @@
+[Unit]
+Description=Inventory Asset Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/inventory-agent.env
+ExecStart=/usr/bin/python3 /opt/inventory-agent/inventory_agent.py
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

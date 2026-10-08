@@ -52,7 +52,7 @@
             </thead>
             <tbody>
                 {% for machine in results %}
-                <tr class="machine-row" data-href="{{ url_for('machine_details', hostname=machine.hostname) }}">
+                <tr class="machine-row" data-href="{{ url_for('asset_details', asset_uuid=machine.asset_uuid) if machine.asset_uuid else url_for('machine_details', hostname=machine.hostname) }}">
                     <td>
                         <div class="os-info">
                             <strong>{{ machine.hostname.upper() }}</strong>

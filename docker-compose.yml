@@ -77,6 +77,33 @@ services:
       cache: {condition: service_healthy}
       inventory-web: {condition: service_healthy}
     command: ["python", "worker.py"]
+    stop_grace_period: 30s
+    mem_limit: 384m
+    cpus: 1.0
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./ssl:/app/ssl:ro
+    networks: [inventory]
+
+  inventory-scheduler:
+    build: .
+    container_name: inventory_scheduler
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: db
+      REDIS_URL: redis://cache:6379/0
+      INVENTORY_SCHEDULER_ENABLED: "false"
+      NETSCOPE_BACKGROUND_ENABLED: "false"
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_healthy}
+      inventory-web: {condition: service_healthy}
+    command: ["python", "scheduler_worker.py"]
+    stop_grace_period: 30s
+    mem_limit: 512m
+    cpus: 1.0
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
@@ -104,6 +131,9 @@ services:
       cache: {condition: service_healthy}
       inventory-web: {condition: service_healthy}
     command: ["python", "discovery_worker.py"]
+    stop_grace_period: 30s
+    mem_limit: 512m
+    cpus: 1.0
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
@@ -123,6 +153,22 @@ services:
       - caddy_config:/config
     networks: [inventory]
 
+  caddy-mtls:
+    image: caddy:2-alpine
+    container_name: inventory_caddy_mtls
+    restart: unless-stopped
+    profiles: ["mtls"]
+    depends_on: [inventory-web]
+    ports:
+      - "${MTLS_PORT:-9443}:9443"
+    volumes:
+      - ./Caddyfile.mtls:/etc/caddy/Caddyfile:ro
+      - ./ssl:/etc/caddy/tls:ro
+      - ./mtls:/etc/caddy/mtls:ro
+      - caddy_mtls_data:/data
+      - caddy_mtls_config:/config
+    networks: [inventory]
+
   kafka:
     image: apache/kafka:4.0.0
     container_name: inventory_kafka
@@ -140,6 +186,14 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - ./data/kafka:/tmp/kraft-combined-logs
     networks: [inventory]
 
 networks:
@@ -149,3 +203,5 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
+  caddy_mtls_data:
+  caddy_mtls_config:

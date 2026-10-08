@@ -29,8 +29,9 @@ def wake_auto_scan():
 
 def _ping_host(ip, timeout):
     try:
+        family_flag = '-6' if ':' in str(ip) else '-4'
         r = subprocess.run(
-            ['ping', '-c', '1', '-W', str(timeout), ip],
+            ['ping', family_flag, '-c', '1', '-W', str(timeout), ip],
             capture_output=True, text=True, timeout=timeout + 2
         )
         if r.returncode == 0:
@@ -174,6 +175,16 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
                 'ip': ip, 'vendor': guess_vendor(mac),
                 'subnet': subnet_label, 'gateway': gw,
                 'ttl': None, 'discovery': 'arp-active',
+            }
+
+        # IPv6 and routed IPv4 hosts may be reachable without a local ARP MAC.
+        represented_ips={info.get('ip') for info in all_found.values()}
+        for ip in reachable:
+            if ip in represented_ips:
+                continue
+            all_found['ip:' + ip] = {
+                'ip': ip, 'vendor': '', 'subnet': subnet_label, 'gateway': gw,
+                'ttl': ttl_map.get(ip), 'discovery': 'ping6' if ':' in ip else 'ping',
             }
 
     if all_found:

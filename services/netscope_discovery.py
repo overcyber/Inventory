@@ -182,7 +182,12 @@ def arp_discover_subnet(subnet, networks=None, exclude=(),
         return {}, 'ipv6-sem-arp'
     excl = set(exclude or ())
     max_hosts = max(1, int(os.getenv('NETSCOPE_MAX_HOSTS_PER_NETWORK', '65536')))
-    iface = get_default_iface()
+    iface = None
+    for net in networks or []:
+        if str(net.get('cidr') or net.get('subnet') or '') == str(subnet):
+            iface = (net.get('interface') or '').strip() or None
+            break
+    iface = iface or get_default_iface()
     if not iface:
         return {}, 'indisponivel'
     iface_ip, _ = get_iface_info(iface)

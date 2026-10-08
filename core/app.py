@@ -86,6 +86,8 @@ def create_app() -> Flask:
 
     app.config['SQLALCHEMY_DATABASE_URI'] = cfg.get_database_url()
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    from core.migrations import upgrade_database
+    upgrade_database()
     db.init_app(app)
 
     app.config['SESSION_TYPE'] = 'sqlalchemy'
@@ -113,19 +115,18 @@ def create_app() -> Flask:
                 app.logger.error(f"[NetScope] Ponte Wazuh falhou após sync agendado: {e}")
 
     with app.app_context():
-        from core.bootstrap import (
-            drop_report_history, bootstrap_admin, ensure_sync_job,
-            ensure_must_change_password_column, ensure_user_full_name_column,
-        )
-        db.create_all()
-        ensure_must_change_password_column(db)
-        ensure_user_full_name_column(db)
-        drop_report_history(app, db)
+        from core.bootstrap import bootstrap_admin, ensure_sync_job
         if scheduler_enabled:
             ensure_sync_job(app, scheduler, scheduled_sync)
         else:
             app.logger.info("[Boot] Scheduler interno desabilitado (worker externo).")
         bootstrap_admin(app, db)
+        try:
+            from services.asset_core import backfill_legacy_host_inventory
+            app.logger.info("[AssetCore] backfill legado: %s",
+                            backfill_legacy_host_inventory(app.logger))
+        except Exception as exc:
+            app.logger.warning("[AssetCore] backfill legado falhou: %s", exc)
 
     os.makedirs(cfg.LOG_DIR, exist_ok=True)
 

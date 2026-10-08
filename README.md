@@ -974,3 +974,41 @@ O serviço web roda com Gunicorn sem `NET_RAW`; active discovery fica isolado em
 ### Planejamento completo
 
 Veja [docs/PLANEJAMENTO_ALTERACOES.md](docs/PLANEJAMENTO_ALTERACOES.md) e [docs/ARCHITECTURE_ASSET_CORE.md](docs/ARCHITECTURE_ASSET_CORE.md).
+
+
+---
+
+## Asset Intelligence v0.20
+
+A v0.20 conclui a migração arquitetural para Asset Core multifuente. O Wazuh é opcional; NetScope, osquery, SNMP, SSH, WinRM, Inventory Agent e API alimentam o mesmo modelo canônico. O schema é controlado por Alembic, entidades possuem histórico temporal, eventos usam outbox transacional e a implantação separa web, scheduler, outbox e discovery.
+
+Documentação técnica: [docs/IMPLEMENTACAO_COMPLETA_020.md](docs/IMPLEMENTACAO_COMPLETA_020.md)  
+Contrato API: [docs/openapi.yaml](docs/openapi.yaml)
+
+### Validação
+
+```bash
+alembic upgrade head
+python -m compileall -q .
+pytest
+docker compose config --quiet
+```
+
+### Wazuh opcional
+
+```env
+WAZUH_ENABLED=false
+LEGACY_HOST_MIRROR=false
+```
+
+### Eventos opcionais
+
+```bash
+docker compose --profile events up -d
+```
+
+### Ingestão mTLS opcional
+
+```bash
+docker compose --profile mtls up -d
+```

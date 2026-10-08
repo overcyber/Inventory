@@ -129,7 +129,8 @@ def _register_route(app):
         copy_headers = [
             ('Cookie', request.headers.get('Cookie')),
             ('Content-Type', request.headers.get('Content-Type')),
-            ('X-CSRFToken', request.headers.get('X-CSRFToken')),
+            ('X-CSRF-Token', request.headers.get('X-CSRF-Token') or request.headers.get('X-CSRFToken')),
+            ('X-CSRFToken', request.headers.get('X-CSRFToken') or request.headers.get('X-CSRF-Token')),
             ('Accept', request.headers.get('Accept')),
             ('Accept-Language', request.headers.get('Accept-Language')),
         ]

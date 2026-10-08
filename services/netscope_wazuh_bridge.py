@@ -5,62 +5,46 @@ from datetime import datetime
 from services.netscope_core import (store, load_config, save_config, guess_vendor, infer_type, mac_from_agent, dev_key, AGENT_FIELDS, _plausible_hostname, _implausible)
 
 def _query_hosts():
-    from models import HostInventory
-    return HostInventory.query.filter_by(is_legacy=False).all()
+    from models import AssetSourceState
+    return (AssetSourceState.query
+            .filter(AssetSourceState.source.in_(('wazuh','wazuh_indexer')))
+            .order_by(AssetSourceState.last_seen.desc()).all())
 
 def _norm_host(name):
     return (name or '').strip().upper().split('.')[0]
 
 def _extract_host_info(host):
-
-    data = host.data or {}
-    agent_info = data.get('agent_info', {}) or {}
-    inv = data.get('inventory', {}) or {}
-
-    macs = []
-    for nif in inv.get('netiface', []) or []:
-        mac = (nif.get('mac') or '').strip().lower()
-        if mac and mac not in ('n/a', '00:00:00:00:00:00', 'unknown') and mac not in macs:
+    state=getattr(host,'state',None) or {}
+    inv=state.get('inventory',{}) or {}
+    raw_agent=state.get('raw_agent_info',{}) or {}
+    agent_id=str(state.get('wazuh_agent_id') or getattr(host,'external_id','') or '')
+    macs=[]
+    for mac in state.get('macs') or []:
+        mac=(mac or '').strip().lower()
+        if mac and mac not in macs: macs.append(mac)
+    for nif in inv.get('netiface',[]) or []:
+        mac=(nif.get('mac') or '').strip().lower()
+        if mac and mac not in ('n/a','00:00:00:00:00:00','unknown') and mac not in macs:
             macs.append(mac)
-
-    def _ip_usable(ip):
-        return ip and ip not in ('N/A', 'n/a', 'unknown', '127.0.0.1', 'localhost') and '.' in ip
-
-    ip = (agent_info.get('ip') or '').strip()
-    if not _ip_usable(ip):
-        ip = ''
-        for addr in inv.get('netaddr', []) or []:
-            a = (addr.get('address') or '').strip()
-            if _ip_usable(a) and not a.startswith('127.'):
-                ip = a
-                break
-        if not ip:
-            ip = (agent_info.get('ip') or '').strip() if _ip_usable(agent_info.get('ip')) else ''
-
-    hostname = ''
-    os_host = inv.get('os', []) or [{}]
-    if os_host:
-        hostname = (os_host[0].get('hostname') or '').strip()
-    hostname = hostname or (agent_info.get('name') or '').strip() or host.hostname
-
-    os_name = ''
-    os_platform = ''
-    if os_host:
-        os_data = os_host[0].get('os', {}) or {}
-        os_name = (os_data.get('name') or '') + ((' ' + os_data.get('version', '')) if os_data.get('version') else '')
-        os_platform = os_data.get('platform') or ''
-
+    ips=[x for x in (state.get('ips') or []) if x and x not in ('127.0.0.1','::1')]
+    ip=state.get('ip_address') or (ips[0] if ips else '')
+    hostname=(state.get('hostname') or '').strip()
+    os_name=state.get('os_name') or ''
+    os_platform=''
+    os_rows=inv.get('os') or []
+    if os_rows and isinstance(os_rows[0],dict):
+        osd=os_rows[0].get('os') or {}
+        if not os_name:
+            os_name=(osd.get('name') or '')+((' '+osd.get('version','')) if osd.get('version') else '')
+        os_platform=osd.get('platform') or ''
     return {
-        'agent_id': str(agent_info.get('id', '') or ''),
-        'agent_name': (agent_info.get('name') or '').strip(),
-        'agent_status': (agent_info.get('status') or '').strip(),
-        'agent_ip': ip,
-        'last_keepalive': (agent_info.get('lastKeepAlive') or '').strip(),
-        'groups': [g for g in (data.get('groups') or agent_info.get('group') or []) if g] or [],
-        'macs': macs,
-        'hostname': hostname,
-        'os': os_name.strip(),
-        'os_platform': os_platform,
+        'agent_id':agent_id,
+        'agent_name':raw_agent.get('name') or hostname,
+        'agent_status':state.get('agent_status') or state.get('agent_status_raw') or raw_agent.get('status') or 'unknown',
+        'agent_ip':ip,
+        'last_keepalive':str(state.get('last_seen') or ''),
+        'groups':state.get('groups') or [],
+        'macs':macs,'hostname':hostname,'os':str(os_name).strip(),'os_platform':os_platform,
     }
 
 def _apply_agent_fields(dev, info, fill_doc=True):
@@ -220,25 +204,18 @@ def dedup_devices():
     return _dedup_devices_locked()
 
 def _duplicate_index_keys(dev):
-    keys = []
-    ip = (dev.get('ip') or '').strip()
-    if ip and ip not in ('127.0.0.1', 'localhost'):
-        keys.append(('ip', ip))
-    prefix = _mac_prefix(dev.get('mac'))
-    subnet = (dev.get('subnet') or '').strip()
-    if prefix and subnet:
-        keys.append(('mac-prefix', prefix + '|' + subnet))
-    host = _norm_host(dev.get('hostname'))
-    if host:
-        keys.append(('hostname', host))
-    agent_id = str(dev.get('agent_id') or '').strip()
-    if agent_id:
-        keys.append(('agent-id', agent_id))
-    serial = str(dev.get('serial_number') or '').strip()
-    if serial:
-        keys.append(('serial', serial))
+    keys=[]
+    mac=(dev.get('mac') or '').strip().lower()
+    if mac and mac!='00:00:00:00:00:00' and not _is_synthetic_mac(mac):
+        keys.append(('mac',mac))
+    ip=(dev.get('ip') or '').strip()
+    if ip and ip not in ('127.0.0.1','localhost','::1'):
+        keys.append(('ip',ip))
+    agent_id=str(dev.get('agent_id') or '').strip()
+    if agent_id: keys.append(('agent-id',agent_id))
+    serial=str(dev.get('serial_number') or '').strip()
+    if serial: keys.append(('serial',serial))
     return keys
-
 
 def _dedup_devices_locked():
     """Index-based deduplication; avoids the previous repeated O(n²) pair scan."""

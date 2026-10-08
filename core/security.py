@@ -195,34 +195,76 @@ def _same_origin(candidate: str, host_url: str) -> bool:
     except (ValueError, AttributeError):
         return False
 
+def csrf_token() -> str:
+    token=session.get('_csrf_token')
+    if not token:
+        token=secrets.token_urlsafe(32)
+        session['_csrf_token']=token
+    return token
+
+
 def register_csrf_protection(app) -> None:
+    """Synchronizer-token CSRF protection for every session-authenticated mutation.
+
+    Machine-to-machine bearer/token ingestion is authenticated independently and
+    is not forced through browser CSRF semantics.
+    """
+    @app.after_request
+    def _set_csrf_cookie(response):
+        try:
+            token=csrf_token()
+            response.set_cookie('inventory_csrf',token,httponly=False,
+                                secure=bool(app.config.get('SESSION_COOKIE_SECURE')),
+                                samesite='Strict',path='/')
+        except Exception:
+            pass
+        return response
 
     @app.before_request
-    def _csrf_origin_check():
-        if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+    def _csrf_check():
+        csrf_token()  # seed session token on GET/login pages
+        if request.method not in ('POST','PUT','PATCH','DELETE'):
             return None
         if request.path.startswith('/static'):
             return None
 
-        origin = request.headers.get('Origin')
-        referer = request.headers.get('Referer')
-        header = origin or referer
-        if not header:
+        # Machine API authentication is verified by the target endpoint itself.
+        machine_auth=bool(request.headers.get('X-Inventory-Token') or
+                          (request.headers.get('Authorization') or '').startswith('Bearer '))
+        if request.path.startswith('/api/v1/assets/observations') and machine_auth                 and not session.get('username'):
             return None
 
-        if not _same_origin(header, request.host_url):
+        expected=session.get('_csrf_token') or ''
+        supplied=(request.headers.get('X-CSRF-Token') or
+                  request.form.get('_csrf_token') or '')
+        if not supplied and request.is_json:
+            body=request.get_json(silent=True) or {}
+            if isinstance(body,dict):
+                supplied=str(body.get('_csrf_token') or '')
+        if not expected or not supplied or not secrets.compare_digest(str(expected),str(supplied)):
             security_logger.warning(
-                f"CSRF BLOQUEADO - Origem estrangeira: {header} "
-                f"IP: {request.remote_addr} Path: {request.path}")
+                "CSRF BLOQUEADO - token ausente/inválido IP=%s Path=%s",
+                request.remote_addr,request.path)
             if is_api_request():
-                return _api_error('Requisição bloqueada (CSRF: origem divergente).',
-                                  400, reason='csrf_origin_mismatch')
-            return render_template(
-                'error.html', error_code=400,
-                title="Requisição inválida",
-                message="A requisição não pôde ser verificada (origem "
-                        "diferente da do servidor). Volte e tente "
-                        "novamente."), 400
+                return _api_error('Requisição bloqueada (CSRF token inválido).',
+                                  400,reason='csrf_token_invalid')
+            return render_template('error.html',error_code=400,
+                                   title="Requisição inválida",
+                                   message="A requisição não pôde ser autenticada."),400
+
+        origin=request.headers.get('Origin')
+        referer=request.headers.get('Referer')
+        header=origin or referer
+        if header and not _same_origin(header,request.host_url):
+            security_logger.warning(
+                "CSRF BLOQUEADO - origem estrangeira: %s IP=%s Path=%s",
+                header,request.remote_addr,request.path)
+            if is_api_request():
+                return _api_error('Requisição bloqueada (CSRF origem divergente).',
+                                  400,reason='csrf_origin_mismatch')
+            return render_template('error.html',error_code=400,
+                                   title="Requisição inválida",
+                                   message="Origem da requisição não corresponde ao servidor."),400
         return None
 
 _ALLOWED_WHILE_CHANGING = {
@@ -247,6 +289,9 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'username' not in session:
+            if is_api_request():
+                return _api_error('Sessão expirada ou autenticação necessária.',401,
+                                  session_expired=True)
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
@@ -255,6 +300,9 @@ def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'username' not in session or session.get('role') != 'admin':
+            if is_api_request():
+                return _api_error('Acesso administrativo necessário.',403,
+                                  reason='admin_required')
             flash("Acesso negado. Apenas administradores.", "danger")
             return redirect(url_for('dashboard'))
         return f(*args, **kwargs)

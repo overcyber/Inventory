@@ -1,0 +1,15 @@
+:9443 {
+    tls /etc/caddy/tls/cert.pem /etc/caddy/tls/key.pem {
+        client_auth {
+            mode require_and_verify
+            trust_pool file {
+                pem_file /etc/caddy/mtls/ca.pem
+            }
+        }
+    }
+    @ingest path /api/v1/assets/observations*
+    handle @ingest {
+        reverse_proxy inventory-web:8000
+    }
+    respond "Not Found" 404
+}

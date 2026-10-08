@@ -301,3 +301,8 @@ SSH/WinRM ---/
 ```
 
 O Wazuh continua sendo uma fonte importante de inventário profundo, mas deixa de ser dependência estrutural.
+
+
+## Atualização de execução — v0.20
+
+O plano acima foi implementado na v0.20. A rastreabilidade final, componentes e critérios de validação estão documentados em [IMPLEMENTACAO_COMPLETA_020.md](IMPLEMENTACAO_COMPLETA_020.md). As duas exceções explícitas continuam válidas: `ssl/key.pem` e logs versionados não foram removidos.

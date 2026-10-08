@@ -625,7 +625,7 @@ class Store:
 
         with self._lock:
             self._load()
-            existing = self.find(mac, include_deleted=True)
+            existing = self.find(mac, include_deleted=True) if mac else self.find_by_ip(info.get('ip'), include_deleted=True)
             gw = info.get('gateway', '')
             now = datetime.now().isoformat()
             if existing and not existing.get('deleted'):
@@ -738,18 +738,22 @@ class Store:
                 self._flush()
         return changed
 
-    def mark_offline(self, found_macs):
+    def mark_offline(self, found_keys):
 
+        found=set(found_keys or ())
         with self._lock:
             self._load()
             for d in self._cache['devices']:
-                if not d.get('deleted'):
-                    if (d.get('mac') or '') and d['mac'] in found_macs:
-                        d['status'] = 'online'
-                    elif d.get('has_agent') and d.get('agent_status') == 'active':
-                        d['status'] = 'online'
-                    else:
-                        d['status'] = 'offline'
+                if d.get('deleted'):
+                    continue
+                keys={(d.get('mac') or '').lower(), (d.get('uid') or '').lower(),
+                      'ip:' + str(d.get('ip') or '')}
+                if any(k and k in found for k in keys):
+                    d['status']='online'
+                elif d.get('has_agent') and d.get('agent_status') == 'active':
+                    d['status']='online'
+                else:
+                    d['status']='offline'
             self._flush()
 
     def create_device(self, body, cfg):

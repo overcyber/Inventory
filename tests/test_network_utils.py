@@ -9,3 +9,8 @@ def test_cidr_hosts():
 def test_membership():
     assert ip_in_network('10.20.7.3', '10.20.0.0/16')
     assert not ip_in_network('10.21.0.1', '10.20.0.0/16')
+
+def test_ipv6_hosts_are_bounded():
+    hosts=list(iter_network_hosts('2001:db8::/64',max_hosts=3))
+    assert hosts==['2001:db8::1','2001:db8::2','2001:db8::3']
+    assert ip_in_network('2001:db8::42','2001:db8::/64')

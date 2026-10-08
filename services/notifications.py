@@ -403,12 +403,13 @@ def _mac_conflict_groups():
         pass
 
     try:
-        from models import HostInventory
-        from services.netscope_wazuh_bridge import _extract_host_info
-        for h in HostInventory.query.filter_by(is_legacy=False).all():
-            info = _extract_host_info(h)
-            for mac in info['macs']:
-                _add(mac, info['agent_ip'], info['hostname'])
+        from models import Asset
+        for asset in Asset.query.filter_by(active=True).all():
+            state=asset.current_state or {}
+            ips=state.get('ips') or ([state.get('ip_address')] if state.get('ip_address') else [])
+            for mac in state.get('macs') or []:
+                for ip in ips:
+                    _add(mac,ip,state.get('hostname') or asset.canonical_name)
     except Exception:
         pass
 
@@ -590,19 +591,22 @@ def _wazuh_rules(prefs, today):
     if not prefs.get('security', True):
         return created
     try:
-        from models import HostInventory
-        hosts = HostInventory.query.filter_by(is_legacy=False).all()
+        from models import AssetSourceState
+        rows = AssetSourceState.query.filter(AssetSourceState.source.in_(('wazuh','wazuh_indexer'))).all()
     except Exception:
         return 0
-    for h in hosts:
-        ai = (h.data or {}).get('agent_info', {}) or {}
-        status = (ai.get('status') or '').strip()
-        if not ai.get('id') or status == 'active':
+    seen = set()
+    for row in rows:
+        state = row.state or {}
+        aid = str(state.get('wazuh_agent_id') or row.external_id or '')
+        if not aid or aid in seen:
             continue
-        if _emit('agent_offline', 'security', 'warning',
-                 f"agent_offline:{ai.get('id')}",
-                 {'name': (ai.get('name') or h.hostname or '?'),
-                  'status': status or '?'}):
+        seen.add(aid)
+        status = str(state.get('agent_status') or state.get('agent_status_raw') or 'unknown')
+        if status.lower() == 'active':
+            continue
+        if _emit('agent_offline','security','warning','agent_offline:' + aid,
+                 {'name': state.get('hostname') or aid, 'status': status or '?'}):
             created += 1
     return created
 
@@ -613,21 +617,40 @@ def _custom_rules(today):
     if not rules:
         return created
     try:
-        from services.netscope_core import store
-        act = store.active()
+        from services.asset_core import list_machine_views
+        assets = list_machine_views(active_only=True)
     except Exception:
         return created
+
+    devices = []
+    for m in assets:
+        ports = []
+        for p in m.get('ports') or []:
+            try:
+                ports.append(int((p.get('local') or {}).get('port')))
+            except (TypeError, ValueError, AttributeError):
+                pass
+        devices.append({
+            'uid': m.get('asset_uuid') or m.get('id'),
+            'hostname': m.get('hostname'),
+            'ip': m.get('ip_address'),
+            'mac': ((m.get('netiface') or [{}])[0].get('mac') if m.get('netiface') else ''),
+            'type': m.get('device_type') or '',
+            'os': m.get('os_full') or m.get('os_name') or '',
+            'status': m.get('device_status') or '',
+            'open_ports': ports,
+        })
 
     for rule in rules:
         rid = str(rule.get('id') or '')
         if not rid:
             continue
         n = 0
-        for d in act:
+        for d in devices:
             if not _rule_matches(d, rule):
                 continue
             if _emit('custom', 'system', rule.get('severity') or 'warning',
-                     f"custom:{rid}:{d.get('uid') or d.get('mac') or d.get('ip', '')}",
+                     f"custom:{rid}:{d.get('uid') or d.get('ip', '')}",
                      {'rule': rule.get('name') or rid,
                       'name': _dname(d), 'ip': d.get('ip', ''),
                       'field': rule.get('field') or '',
