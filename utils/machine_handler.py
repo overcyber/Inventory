@@ -123,6 +123,13 @@ def process_machine_data(raw_data):
     return processed
 
 def get_machine_fallback(hostname):
+    try:
+        from services.asset_core import find_machine_view
+        machine = find_machine_view(hostname)
+        if machine:
+            return machine
+    except Exception:
+        pass
     from models import HostInventory
     full = str(hostname or '').strip()
     h = HostInventory.query.filter_by(hostname=hostname).first()

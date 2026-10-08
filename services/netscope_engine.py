@@ -2,6 +2,7 @@
 import re
 import socket
 import subprocess
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,6 +13,7 @@ from services.netscope_core import (store, guess_vendor, load_config,
                                     save_config, _plausible_hostname)
 from services.netscope_discovery import arp_discover_subnet, read_arp_table, clamp_interval
 from services.netscope_snapshots import get_instance
+from services.network_utils import chunked, ip_in_network, iter_network_hosts, network_label
 
 AUTO_SCAN_INTERVAL_MIN = 5
 AUTO_SCAN_INTERVAL_MAX = 360
@@ -112,46 +114,57 @@ def _auto_wazuh_sync():
 def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
     global _scan_state
     timeout = scan_cfg.get('timeout', 1)
-    workers = scan_cfg.get('workers', 64)
+    workers = max(1, int(scan_cfg.get('workers', 64)))
+    max_hosts = max(1, int(os.getenv('NETSCOPE_MAX_HOSTS_PER_NETWORK', '65536')))
     all_found = {}
     ttl_map = {}
     errors = []
 
     for net in networks:
-        subnet = net['subnet']
+        spec = net.get('cidr') or net.get('subnet')
+        if not spec:
+            continue
+        try:
+            subnet_label = network_label(spec)
+            hosts_iter = iter_network_hosts(spec, max_hosts=max_hosts)
+        except Exception as exc:
+            errors.append({'network': str(spec), 'error': str(exc)})
+            continue
         gw = net.get('gateway', '')
-        ips = [f'{subnet}.{i}' for i in range(1, 255)]
         reachable = set()
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(_ping_host, ip, timeout): ip for ip in ips}
-            for fut in as_completed(futures, timeout=timeout * 255 + 15):
-                ip = futures[fut]
-                try:
-                    ok, ttl = fut.result()
-                    if ok:
-                        reachable.add(ip)
-                        if ttl:
-                            ttl_map[ip] = ttl
-                except Exception:
-                    pass
 
-        time.sleep(0.5)
+        # Chunk submission to avoid creating tens of thousands of Futures at once.
+        for batch in chunked(hosts_iter, max(256, workers * 8)):
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(_ping_host, ip, timeout): ip for ip in batch}
+                for fut in as_completed(futures):
+                    ip = futures[fut]
+                    try:
+                        ok, ttl = fut.result()
+                        if ok:
+                            reachable.add(ip)
+                            if ttl:
+                                ttl_map[ip] = ttl
+                    except Exception:
+                        pass
+
+        time.sleep(0.2)
         arp = read_arp_table()
-
         try:
             arp_extra, _arp_method = arp_discover_subnet(
-                subnet, networks, exclude=reachable)
+                spec, networks, exclude=reachable)
         except Exception:
             arp_extra, _arp_method = {}, 'erro'
+
         for ip, mac in arp.items():
-            if ip.startswith(subnet + '.') and ip not in reachable:
+            if ip_in_network(ip, spec) and ip not in reachable:
                 arp_extra.setdefault(ip, mac)
 
         for ip, mac in arp.items():
-            if ip.startswith(subnet + '.') and ip in reachable:
+            if ip_in_network(ip, spec) and ip in reachable:
                 all_found[mac] = {
                     'ip': ip, 'vendor': guess_vendor(mac),
-                    'subnet': subnet, 'gateway': gw,
+                    'subnet': subnet_label, 'gateway': gw,
                     'ttl': ttl_map.get(ip), 'discovery': 'ping',
                 }
         for ip, mac in arp_extra.items():
@@ -159,15 +172,16 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
                 continue
             all_found[mac] = {
                 'ip': ip, 'vendor': guess_vendor(mac),
-                'subnet': subnet, 'gateway': gw,
-                'ttl': None, 'discovery': 'arp',
+                'subnet': subnet_label, 'gateway': gw,
+                'ttl': None, 'discovery': 'arp-active',
             }
 
     if all_found:
         dns_results = {}
         with ThreadPoolExecutor(max_workers=32) as pool:
-            dns_futs = {pool.submit(_resolve_dns, info['ip']): mac for mac, info in all_found.items()}
-            for fut in as_completed(dns_futs, timeout=90):
+            dns_futs = {pool.submit(_resolve_dns, info['ip']): mac
+                        for mac, info in all_found.items()}
+            for fut in as_completed(dns_futs):
                 mac = dns_futs[fut]
                 try:
                     dns_results[mac] = fut.result(timeout=3)
@@ -181,13 +195,17 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
             if store.upsert_scan_result(mac, info, flush=False):
                 new_count += 1
             found_macs.add(mac)
-
         store.mark_offline(found_macs)
     else:
         store.mark_offline(set())
         new_count = 0
 
     wazuh_stats = _auto_wazuh_sync()
+    try:
+        from services.asset_core import sync_netscope_assets
+        asset_stats = sync_netscope_assets()
+    except Exception as exc:
+        asset_stats = {'observed': 0, 'errors': 1, 'error': str(exc)}
 
     try:
         from flask import current_app as _ca
@@ -217,8 +235,9 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
             'scanned': len(networks), 'new': new_count,
             'total': len(all_found), 'errors': errors,
             'arp_found': sum(1 for i in all_found.values()
-                             if i.get('discovery') == 'arp'),
+                             if i.get('discovery') == 'arp-active'),
             'wazuh_synced': wazuh_stats is not None,
+            'asset_core': asset_stats,
         }
         _scan_state['running'] = False
 

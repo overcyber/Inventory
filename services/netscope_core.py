@@ -335,7 +335,8 @@ DEFAULT_CONFIG = {
         "6379": "Redis", "8080": "HTTP-Alt", "8443": "HTTPS-Alt"
     },
     "port_timeout": 0.3,
-    "port_scan": {"workers": 512, "tcp_timeout": 0.3,
+    "port_scan": {"profile": "standard", "udp_profile": "quick",
+                  "workers": 256, "tcp_timeout": 0.3,
                   "udp_timeout": 0.5, "banner": True},
     "switches": {}
 }
@@ -768,7 +769,7 @@ class Store:
             subnet_str = body.get('subnet', '').strip()
             gw = ''
             if subnet_str:
-                gw = next((n.get('gateway', '') for n in cfg.get('networks', []) if n['subnet'] == subnet_str), '')
+                gw = next((n.get('gateway', '') for n in cfg.get('networks', []) if (n.get('subnet') or n.get('cidr')) == subnet_str), '')
             dev = self._new_device(mac, ip, body.get('vendor', ''), subnet_str, gw or None, source='manual')
             dev['hostname'] = body.get('hostname', '')
             dev['type'] = body.get('type', dev['type'])
@@ -993,7 +994,7 @@ class Store:
             devices = self.active()
             if not devices:
                 return 0
-            gw_map = {n['subnet']: n.get('gateway', '').lower() for n in cfg.get('networks', [])}
+            gw_map = {(n.get('subnet') or n.get('cidr')): n.get('gateway', '').lower() for n in cfg.get('networks', []) if (n.get('subnet') or n.get('cidr'))}
             groups = {}
             for d in devices:
                 groups.setdefault(d.get('subnet', '?'), []).append(d)

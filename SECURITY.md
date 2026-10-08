@@ -1,21 +1,21 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+| Version | Supported |
+| --- | --- |
+| 0.19.x | ✅ |
+| 0.18.x | Security fixes only |
+| < 0.18 | ❌ |
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+## Deployment requirements
 
-## Reporting a Vulnerability
+- Wazuh TLS certificate validation is enabled by default. Use `WAZUH_CA_BUNDLE` for private CAs.
+- Do not configure fixed/default database or administrator passwords. The installer generates secrets when values are absent.
+- Keep `INVENTORY_INGEST_TOKEN`, Wazuh credentials, SSH/WinRM credentials and webhook tokens outside source code.
+- In the microservice deployment, only `inventory-discovery` requires raw-network capability; `inventory-web` must run without `NET_RAW`.
+- Prefer Caddy/reverse-proxy TLS + Gunicorn for production.
 
-Use this section to tell people how to report a vulnerability.
+## Reporting a vulnerability
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Report security issues privately to the repository maintainer. Include affected version, reproduction conditions, impact and any proposed mitigation. Do not include production credentials or sensitive inventory exports in public issues.

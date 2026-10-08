@@ -97,7 +97,9 @@ def create_app() -> Flask:
     _scheduler = APScheduler()
     scheduler = _scheduler
     scheduler.init_app(app)
-    if _acquire_scheduler_lock(app):
+    scheduler_enabled = (os.getenv('INVENTORY_SCHEDULER_ENABLED', 'true')
+                         .strip().lower() in ('1', 'true', 'yes', 'on', 'sim'))
+    if scheduler_enabled and _acquire_scheduler_lock(app):
         scheduler.start()
 
     def scheduled_sync():
@@ -119,7 +121,10 @@ def create_app() -> Flask:
         ensure_must_change_password_column(db)
         ensure_user_full_name_column(db)
         drop_report_history(app, db)
-        ensure_sync_job(app, scheduler, scheduled_sync)
+        if scheduler_enabled:
+            ensure_sync_job(app, scheduler, scheduled_sync)
+        else:
+            app.logger.info("[Boot] Scheduler interno desabilitado (worker externo).")
         bootstrap_admin(app, db)
 
     os.makedirs(cfg.LOG_DIR, exist_ok=True)
@@ -304,6 +309,9 @@ def register_routes(app: Flask) -> None:
 
     from routes.notifications import notify_bp
     app.register_blueprint(notify_bp)
+
+    from routes.assets import asset_bp
+    app.register_blueprint(asset_bp)
 
     from routes.errors import register_error_handlers
     register_error_handlers(app)

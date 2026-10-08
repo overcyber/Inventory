@@ -11,12 +11,19 @@ import os
 
 from utils import cache as shared_cache
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 MIN_REQUEST_INTERVAL = 0.2
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 1.0
-ENDPOINTS = ['hardware', 'os', 'packages', 'ports', 'processes', 'netaddr', 'netiface', 'netproto']
+ENDPOINTS = [
+    'hardware', 'os', 'packages', 'ports', 'processes', 'netaddr', 'netiface',
+    'netproto', 'services', 'users', 'groups', 'browser_extensions', 'hotfixes',
+]
+
+def _env_bool(name, default=True):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on', 'sim')
 
 class WazuhCollector:
 
@@ -33,13 +40,16 @@ class WazuhCollector:
         self._last_req = 0.0
         self.token = None
         self.logger = logger
+        verify = _env_bool('WAZUH_TLS_VERIFY', True)
+        ca_bundle = (os.getenv('WAZUH_CA_BUNDLE') or '').strip()
+        self.verify = ca_bundle if verify and ca_bundle else verify
 
     def _get_session(self):
 
         s = getattr(self._local, 'session', None)
         if s is None:
             s = requests.Session()
-            s.verify = False
+            s.verify = self.verify
             if self.token:
                 s.headers.update({'Authorization': f'Bearer {self.token}'})
             else:
@@ -84,14 +94,17 @@ class WazuhCollector:
                     self.logger.error(f"[Coletor] Erro crítico após {MAX_RETRIES} tentativas em {url}: {e}")
                     raise
 
-    def get_json(self, endpoint):
+    def get_json(self, endpoint, optional=False):
 
         url = f"{self.base_url}/{endpoint}"
         try:
             resp = self._request('GET', url, timeout=30)
             return resp.json()
         except Exception as e:
-            self.logger.error(f'[Coletor] Falha ao obter JSON de {url}: {e}')
+            if optional:
+                self.logger.debug(f'[Coletor] Endpoint opcional indisponível {url}: {e}')
+            else:
+                self.logger.error(f'[Coletor] Falha ao obter JSON de {url}: {e}')
             return {}
 
     @staticmethod
@@ -117,15 +130,19 @@ class WazuhCollector:
             dt = datetime.fromisoformat(ts)
             now = datetime.now(dt.tzinfo)
             delta = now - dt
-            return 'Ligado' if delta <= timedelta(days=30) else 'Desligado'
+            grace = max(60, int(os.getenv('WAZUH_ACTIVE_GRACE_SECONDS', '300')))
+            return 'Ligado' if delta <= timedelta(seconds=grace) else 'Desligado'
         except Exception:
             return 'Desligado'
 
     def _fetch_agent_inventory(self, agent_id):
 
         inv = {}
+        mandatory = {'hardware', 'os', 'packages', 'ports', 'processes',
+                     'netaddr', 'netiface', 'netproto'}
         for ep in ENDPOINTS:
-            data = self.get_json(f"syscollector/{agent_id}/{ep}")
+            data = self.get_json(f"syscollector/{agent_id}/{ep}",
+                                 optional=ep not in mandatory)
             items = data.get('data', {}).get('affected_items', [])
             inv[ep] = [self._clean_data(it) for it in items]
         return inv
@@ -157,11 +174,19 @@ class WazuhCollector:
                 break
         return agents
 
-def sync_wazuh_data(app):
+def _sync_wazuh_only(app):
 
     with app.app_context():
         logger = app.logger
-        logger.info("[Coletor] Iniciando ciclo de sincronização robusta...")
+        host = (os.getenv('WAZUH_HOST') or '').strip()
+        default_enabled = bool(host and host.upper() not in {'IP_WAZUH', 'CHANGEME'})
+        if not _env_bool('WAZUH_ENABLED', default_enabled):
+            logger.info("[Coletor] Wazuh desabilitado; ciclo pulado.")
+            return {'processed': 0, 'errors': 0, 'skipped': True}
+        if not host or host.upper() in {'IP_WAZUH', 'CHANGEME'}:
+            logger.info("[Coletor] Wazuh não configurado; ciclo pulado.")
+            return {'processed': 0, 'errors': 0, 'skipped': True}
+        logger.info("[Coletor] Iniciando ciclo de sincronização Wazuh...")
 
         found_groups = []
         found_agent_ids = []
@@ -236,6 +261,7 @@ def sync_wazuh_data(app):
             return hostname, payload, agent_id
 
         processed_count = 0
+        error_count = 0
         found_agent_ids = []
         found_hostnames = []
         with ThreadPoolExecutor(max_workers=5) as executor:
@@ -253,8 +279,15 @@ def sync_wazuh_data(app):
                         registro.last_updated = datetime.utcnow()
                     else:
                         db.session.add(HostInventory(hostname=hostname, data=payload, is_legacy=False))
+                    db.session.flush()
+                    try:
+                        from services.asset_core import ingest_wazuh_payload
+                        ingest_wazuh_payload(hostname, payload, str(agent_id or ''))
+                    except Exception as asset_exc:
+                        logger.error(f"[AssetCore] Falha ao normalizar {hostname}: {asset_exc}")
                     processed_count += 1
                 except Exception as e:
+                    error_count += 1
                     logger.error(f"[Coletor] Erro ao processar detalhe de agente: {e}")
 
         try:
@@ -276,4 +309,14 @@ def sync_wazuh_data(app):
 
         except Exception as e:
             db.session.rollback()
+            error_count += 1
             logger.error(f"[Coletor] Falha ao persistir ou expirar dados: {e}")
+
+        return {'processed': processed_count, 'errors': error_count}
+
+
+def sync_wazuh_data(app):
+    """Backward-compatible entry point. It now runs all enabled InventorySource adapters."""
+    with app.app_context():
+        from services.inventory_sources import sync_configured_sources
+        return sync_configured_sources(app)

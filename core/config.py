@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = '0.18.29'
+APP_VERSION = '0.19.0'
 
 db_user = os.getenv("DB_USER")
 db_pass = os.getenv("DB_PASS")

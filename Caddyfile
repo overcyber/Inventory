@@ -1,0 +1,10 @@
+:8080 {
+    encode zstd gzip
+    reverse_proxy inventory-web:8000
+}
+
+:8443 {
+    tls /etc/caddy/tls/cert.pem /etc/caddy/tls/key.pem
+    encode zstd gzip
+    reverse_proxy inventory-web:8000
+}

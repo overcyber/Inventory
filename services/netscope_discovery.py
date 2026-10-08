@@ -2,12 +2,14 @@
 import socket
 import struct
 import threading
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
 from services.netscope_core import guess_vendor, load_config, save_config, store
+from services.network_utils import chunked, ip_in_network, iter_network_hosts, parse_network_spec
 
 def read_arp_table():
 
@@ -72,7 +74,7 @@ def get_iface_info(iface):
     return ip, mac
 
 def _in_subnet(ip, prefix):
-    return str(ip).startswith(str(prefix) + '.')
+    return ip_in_network(ip, prefix)
 
 ETH_BROADCAST = 'ff:ff:ff:ff:ff:ff'
 
@@ -171,27 +173,43 @@ def udp_arp_trigger(ips, settle=2.0):
 
 def arp_discover_subnet(subnet, networks=None, exclude=(),
                         timeout=1.5, settle=2.0):
-
-    prefix = str(subnet)
+    """Active ARP discovery for IPv4 CIDR/legacy prefixes, chunked to bound memory."""
+    try:
+        network = parse_network_spec(subnet)
+    except ValueError:
+        return {}, 'invalido'
+    if network.version != 4:
+        return {}, 'ipv6-sem-arp'
     excl = set(exclude or ())
-    ips = [f'{prefix}.{i}' for i in range(1, 255) if f'{prefix}.{i}' not in excl]
-    if not ips:
-        return {}, 'nenhum'
+    max_hosts = max(1, int(os.getenv('NETSCOPE_MAX_HOSTS_PER_NETWORK', '65536')))
     iface = get_default_iface()
     if not iface:
         return {}, 'indisponivel'
     iface_ip, _ = get_iface_info(iface)
-    if not iface_ip or not _in_subnet(iface_ip, prefix):
+    if not iface_ip or not ip_in_network(iface_ip, str(network)):
         return {}, 'indisponivel'
-    try:
-        return raw_arp_sweep(iface, ips, timeout=timeout), 'arp-raw'
-    except (PermissionError, OSError):
-        pass
-    udp_arp_trigger(ips, settle=settle)
-    table = read_arp_table()
-    found = {ip: mac for ip, mac in table.items()
-             if ip in set(ips) and _in_subnet(ip, prefix)}
-    return found, 'arp-udp' if found else 'arp-udp-vazio'
+
+    found = {}
+    method = 'arp-raw'
+    hosts = (ip for ip in iter_network_hosts(str(network), max_hosts=max_hosts)
+             if ip not in excl)
+    for batch in chunked(hosts, 1024):
+        if not batch:
+            continue
+        try:
+            found.update(raw_arp_sweep(iface, batch, timeout=timeout))
+            continue
+        except (PermissionError, OSError):
+            method = 'arp-udp'
+        udp_arp_trigger(batch, settle=min(settle, 0.25))
+        table = read_arp_table()
+        batch_set = set(batch)
+        for ip, mac in table.items():
+            if ip in batch_set and ip_in_network(ip, str(network)):
+                found[ip] = mac
+    if found:
+        return found, method
+    return {}, method + '-vazio'
 
 ARP_INTERVAL_MIN = 5
 ARP_INTERVAL_MAX = 360
@@ -289,7 +307,9 @@ def _monitor_pass_body(app, networks):
     seen = 0
     method = ''
     for net in networks:
-        subnet = net['subnet']
+        subnet = net.get('cidr') or net.get('subnet')
+        if not subnet:
+            continue
         found, m = arp_discover_subnet(subnet, networks)
         if str(m).startswith('arp-'):
             method = m
@@ -297,9 +317,13 @@ def _monitor_pass_body(app, networks):
         for ip, mac in found.items():
             if store.find(mac, include_deleted=True):
                 continue
-            info = {'ip': ip, 'vendor': guess_vendor(mac), 'subnet': subnet,
-                    'gateway': net.get('gateway', ''), 'discovery': 'arp',
-                    'source': 'monitor'}
+            try:
+                subnet_label = str(parse_network_spec(subnet))
+            except Exception:
+                subnet_label = str(subnet)
+            info = {'ip': ip, 'vendor': guess_vendor(mac), 'subnet': subnet_label,
+                    'gateway': net.get('gateway', ''), 'discovery': 'arp-active',
+                    'source': 'active-monitor'}
             dns = _resolve_dns_safe(ip)
             if dns:
                 info['dns_name'] = dns
@@ -318,7 +342,7 @@ def _monitor_pass_body(app, networks):
     if new_count:
         try:
             app.logger.info(
-                f'[NetScope] Monitor ARP: {new_count} novo(s) host(s) '
+                f'[NetScope] Active ARP discovery: {new_count} novo(s) host(s) '
                 f'descoberto(s) via {method} (sem ping).')
         except Exception:
             pass
@@ -326,6 +350,13 @@ def _monitor_pass_body(app, networks):
         _dns_refresh_known(app)
     except Exception:
         pass
+    if seen or new_count:
+        try:
+            with app.app_context():
+                from services.asset_core import sync_netscope_assets
+                sync_netscope_assets()
+        except Exception:
+            pass
 
 def _monitor_loop(app):
 

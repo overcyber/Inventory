@@ -907,3 +907,70 @@ O **INVENTORY** é um projeto em desenvolvimento ativo, com um _roadmap_ claro p
 ## 13. Conclusão
 
 O sistema **INVENTORY** preenche uma lacuna estratégica ao eliminar a cegueira sobre os ativos de TI, transformando os dados brutos de telemetria coletados pelo **Wazuh** e a topologia mapeada pelo **NetScope** em uma plataforma centralizada de visualização, busca, documentação e auditoria. Ele oferece uma _solução leve e segura_ que se integra de forma transparente à infraestrutura existente, _sem a necessidade de agentes adicionais_ — e, com o `install.sh`, vai do servidor limpo ao sistema no ar em um único comando.
+
+
+---
+
+## Asset Core multifuente — v0.19
+
+A partir da v0.19, o Inventory passa a ter um modelo canônico de ativos independente do Wazuh. O Wazuh continua suportado, mas é uma fonte opcional entre NetScope, osquery, SNMP, SSH, WinRM, Wazuh Indexer e ingestão via API.
+
+```text
+Wazuh -----\
+NetScope ----\
+osquery ------- > Asset Core -> PostgreSQL -> Dashboard/API
+SNMP ---------/                   |-> Kafka asset.snapshot.v1
+SSH/WinRM ---/                    \-> Webhooks CTI/NDR/SOAR
+```
+
+### Operação sem Wazuh
+
+```env
+WAZUH_ENABLED=false
+NETSCOPE_SOURCE_ENABLED=true
+```
+
+O NetScope e as demais fontes continuam produzindo ativos. Para inventário profundo de endpoints sem Wazuh, habilite osquery, SSH ou WinRM.
+
+### TLS do Wazuh
+
+```env
+WAZUH_TLS_VERIFY=true
+WAZUH_CA_BUNDLE=/etc/inventory/ca/wazuh-ca.pem
+```
+
+### API do Asset Core
+
+```text
+GET  /api/v1/assets
+GET  /api/v1/assets/<asset_uuid>
+GET  /api/v1/sources
+POST /api/v1/assets/observations
+POST /api/v1/sources/sync
+```
+
+### Migrations
+
+```bash
+alembic upgrade head
+```
+
+Instalações novas continuam compatíveis com o bootstrap atual; migrations passam a ser o mecanismo recomendado para evolução do schema.
+
+### Deploy em serviços separados
+
+```bash
+cp .env.example .env
+# preencher DB_PASS e demais segredos
+
+docker compose up -d --build
+
+# Kafka opcional
+docker compose --profile events up -d
+```
+
+O serviço web roda com Gunicorn sem `NET_RAW`; active discovery fica isolado em `inventory-discovery`.
+
+### Planejamento completo
+
+Veja [docs/PLANEJAMENTO_ALTERACOES.md](docs/PLANEJAMENTO_ALTERACOES.md) e [docs/ARCHITECTURE_ASSET_CORE.md](docs/ARCHITECTURE_ASSET_CORE.md).

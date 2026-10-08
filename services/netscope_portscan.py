@@ -2,13 +2,57 @@
 import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime
 from pathlib import Path
 
 from services.netscope_core import load_config, store
 
 ALL_PORTS = range(1, 65536)
+QUICK_PORTS = sorted({
+    21,22,23,25,53,67,68,69,80,88,110,123,135,137,138,139,143,161,162,
+    389,443,445,465,500,514,515,548,554,587,631,636,993,995,1080,1194,
+    1433,1434,1521,1723,1900,2049,3128,3306,3389,4444,5060,5222,5353,
+    5432,5555,5666,5900,5984,5985,5986,6379,6443,6667,8000,8080,8443,
+    8888,9100,9200,11211,27017,32400,49152,
+})
+STANDARD_EXTRA = {1433,1521,2049,2375,2376,3306,3389,5432,5900,5985,5986,
+                  6379,6443,8000,8080,8443,8888,9100,9200,11211,27017,32400}
+
+def ports_for_profile(profile='standard', custom=None):
+    profile = str(profile or 'standard').lower()
+    if profile == 'quick':
+        return list(QUICK_PORTS)
+    if profile == 'full':
+        return list(ALL_PORTS)
+    if profile == 'custom':
+        out = []
+        for item in custom or []:
+            try:
+                p = int(item)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= p <= 65535:
+                out.append(p)
+        return sorted(set(out))
+    return sorted(set(range(1, 1025)) | STANDARD_EXTRA)
+
+def _bounded_execute(pool, items, submit, max_pending, on_result):
+    iterator = iter(items)
+    pending = set()
+    while len(pending) < max_pending:
+        try:
+            pending.add(submit(pool, next(iterator)))
+        except StopIteration:
+            break
+    while pending:
+        done, pending = wait(pending, return_when=FIRST_COMPLETED)
+        for fut in done:
+            on_result(fut)
+            try:
+                pending.add(submit(pool, next(iterator)))
+            except StopIteration:
+                pass
 
 _FALLBACK_SERVICES = {
     21: ('ftp', 'tcp'), 22: ('ssh', 'tcp'), 23: ('telnet', 'tcp'),
@@ -130,34 +174,34 @@ def _recv_banner(sock, timeout=0.4, limit=120):
     except (socket.timeout, OSError):
         return ''
 
-def scan_tcp(ip, ports=None, workers=512, timeout=0.3, banner=True,
+def scan_tcp(ip, ports=None, workers=256, timeout=0.3, banner=True,
              progress_cb=None):
-
-    if ports is None:
-        ports = ALL_PORTS
-    ports = list(ports)
+    ports = list(ports if ports is not None else ports_for_profile('standard'))
     workers = max(16, min(int(workers), _fd_worker_cap()))
     results = []
     done = {'n': 0}
     lock = threading.Lock()
+    total = len(ports)
 
-    def _tick():
+    def submit(pool, port):
+        fut = pool.submit(_tcp_probe, ip, port, timeout, banner)
+        fut._inventory_port = port
+        return fut
+
+    def on_result(fut):
+        try:
+            entry = fut.result()
+        except Exception:
+            entry = None
+        if entry is not None:
+            results.append(entry)
         with lock:
             done['n'] += 1
-            if progress_cb and (done['n'] % 512 == 0 or done['n'] == len(ports)):
-                progress_cb(done['n'], len(ports))
+            if progress_cb and (done['n'] % 128 == 0 or done['n'] == total):
+                progress_cb(done['n'], total)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_tcp_probe, ip, p, timeout, banner): p
-                   for p in ports}
-        for fut in as_completed(futures):
-            try:
-                entry = fut.result()
-            except Exception:
-                entry = None
-            if entry is not None:
-                results.append(entry)
-            _tick()
+        _bounded_execute(pool, ports, submit, max(workers * 2, 64), on_result)
     results.sort(key=lambda r: r['port'])
     return results
 
@@ -200,46 +244,43 @@ def _udp_probe(ip, port, timeout, double_probe=False):
         except OSError:
             pass
 
-def scan_udp(ip, ports=None, workers=512, timeout=0.5, progress_cb=None,
+def scan_udp(ip, ports=None, workers=128, timeout=0.5, progress_cb=None,
              known_only=True):
-
-    if ports is None:
-        ports = ALL_PORTS
-    ports = list(ports)
+    ports = list(ports if ports is not None else QUICK_PORTS)
     workers = max(16, min(int(workers), _fd_worker_cap()))
     open_ports, of_ports = [], []
     closed = {'n': 0}
+    done = {'n': 0}
     lock = threading.Lock()
     total = len(ports)
-    done = {'n': 0}
 
-    def _tick():
+    def submit(pool, port):
+        fut = pool.submit(_udp_probe, ip, port, timeout, port <= 1024)
+        fut._inventory_port = port
+        return fut
+
+    def on_result(fut):
+        p = fut._inventory_port
+        try:
+            state = fut.result()
+        except Exception:
+            state = 'open|filtered'
+        if state == 'open':
+            open_ports.append({'port': p, 'name': service_name(p, 'udp'),
+                               'state': 'open'})
+        elif state == 'open|filtered':
+            if not known_only or service_name(p, 'udp'):
+                of_ports.append({'port': p, 'name': service_name(p, 'udp'),
+                                 'state': 'open|filtered'})
+        else:
+            closed['n'] += 1
         with lock:
             done['n'] += 1
-            if progress_cb and (done['n'] % 1024 == 0 or done['n'] == total):
+            if progress_cb and (done['n'] % 128 == 0 or done['n'] == total):
                 progress_cb(done['n'], total)
 
-    with ThreadPoolExecutor(max_workers=max(16, int(workers))) as pool:
-        futures = {}
-        for p in ports:
-            futures[pool.submit(_udp_probe, ip, p, timeout, p <= 1024)] = p
-        for fut in as_completed(futures):
-            p = futures[fut]
-            try:
-                state = fut.result()
-            except Exception:
-                state = 'open|filtered'
-            if state == 'open':
-                open_ports.append({'port': p, 'name': service_name(p, 'udp'),
-                                   'state': 'open'})
-            elif state == 'open|filtered':
-                if not known_only or service_name(p, 'udp'):
-                    of_ports.append({'port': p, 'name': service_name(p, 'udp'),
-                                     'state': 'open|filtered'})
-            else:
-                with lock:
-                    closed['n'] += 1
-            _tick()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        _bounded_execute(pool, ports, submit, max(workers * 2, 64), on_result)
     open_ports.sort(key=lambda r: r['port'])
     of_ports.sort(key=lambda r: r['port'])
     return open_ports, of_ports, closed['n']
@@ -344,6 +385,10 @@ def _run_job(app, uid, ip, hostname=''):
         except (TypeError, ValueError):
             utmo = 0.5
         want_banner = pscan.get('banner', True) is not False
+        profile = str(pscan.get('profile', 'standard') or 'standard').lower()
+        udp_profile = str(pscan.get('udp_profile', 'quick') or 'quick').lower()
+        tcp_ports = ports_for_profile(profile, pscan.get('custom_ports'))
+        udp_ports = ports_for_profile(udp_profile, pscan.get('custom_udp_ports'))
 
         def prog_tcp(n, total):
             pct = min(60.0, 60.0 * n / max(1, total))
@@ -357,13 +402,14 @@ def _run_job(app, uid, ip, hostname=''):
                 if uid in _jobs:
                     _jobs[uid]['progress'] = round(pct, 1)
 
-        tcp = scan_tcp(ip, workers=workers, timeout=tmo,
+        tcp = scan_tcp(ip, ports=tcp_ports, workers=workers, timeout=tmo,
                        banner=want_banner, progress_cb=prog_tcp)
         with _job_lock:
             if uid in _jobs:
                 _jobs[uid]['phase'] = 'udp'
         open_udp, of_udp, closed_n = scan_udp(
-            ip, workers=workers, timeout=utmo, progress_cb=prog_udp)
+            ip, ports=udp_ports, workers=max(16, workers // 2),
+            timeout=utmo, progress_cb=prog_udp)
         duration = round(time.time() - started, 1)
         finished_iso = datetime.now().isoformat()
 
@@ -373,6 +419,8 @@ def _run_job(app, uid, ip, hostname=''):
                 if dev:
                     dev['open_ports'] = [r['port'] for r in tcp]
                     dev['port_scan'] = {
+                        'profile': profile,
+                        'udp_profile': udp_profile,
                         'scanned_at': finished_iso,
                         'started_at': started_iso,
                         'duration_s': duration,
@@ -383,6 +431,11 @@ def _run_job(app, uid, ip, hostname=''):
                     }
                     with store._lock:
                         store._flush()
+                    try:
+                        from services.asset_core import ingest_netscope_device
+                        ingest_netscope_device(dev)
+                    except Exception:
+                        pass
         except Exception:
             pass
 

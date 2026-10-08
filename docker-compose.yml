@@ -2,21 +2,11 @@ services:
   db:
     image: postgres:16
     container_name: inventory_postgres
-    restart: always
-    entrypoint:
-      - bash
-      - -c
-      - |
-        if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
-          find /var/lib/postgresql/data -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-        fi
-        exec docker-entrypoint.sh postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-inventorydb}
-      POSTGRES_PASSWORD: ${DB_PASS:-senhadoinventorydb}
+      POSTGRES_PASSWORD: ${DB_PASS:?DB_PASS must be set}
       POSTGRES_DB: ${DB_NAME:-inventory_db}
-    ports:
-      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-inventorydb} -d ${DB_NAME:-inventory_db}"]
       interval: 5s
@@ -25,18 +15,136 @@ services:
       start_period: 10s
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks: [inventory]
 
   cache:
     image: redis:7-alpine
     container_name: inventory_redis
-    restart: always
+    restart: unless-stopped
     command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
-    ports:
-      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 12
-      start_period: 5s
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks: [inventory]
 
+  inventory-web:
+    build: .
+    container_name: inventory_web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: db
+      REDIS_URL: redis://cache:6379/0
+      INVENTORY_SCHEDULER_ENABLED: "false"
+      NETSCOPE_BACKGROUND_ENABLED: "false"
+      USE_HTTPS: "false"
+      TRUST_PROXY: "1"
+      SESSION_COOKIE_SECURE: "true"
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_healthy}
+    command: ["sh", "-c", "alembic upgrade head && exec gunicorn --bind 0.0.0.0:8000 --workers 2 --threads 4 --timeout 120 app:app"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks: [inventory]
+
+  inventory-worker:
+    build: .
+    container_name: inventory_worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: db
+      REDIS_URL: redis://cache:6379/0
+      INVENTORY_SCHEDULER_ENABLED: "false"
+      NETSCOPE_BACKGROUND_ENABLED: "false"
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_healthy}
+      inventory-web: {condition: service_healthy}
+    command: ["python", "worker.py"]
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./ssl:/app/ssl:ro
+    networks: [inventory]
+
+  inventory-discovery:
+    build: .
+    container_name: inventory_discovery
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    environment:
+      DB_HOST: 127.0.0.1
+      REDIS_URL: redis://127.0.0.1:6379/0
+      INVENTORY_SCHEDULER_ENABLED: "false"
+      NETSCOPE_BACKGROUND_ENABLED: "false"
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_healthy}
+      inventory-web: {condition: service_healthy}
+    command: ["python", "discovery_worker.py"]
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: inventory_caddy
+    restart: unless-stopped
+    depends_on: [inventory-web]
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+      - "${HTTPS_PORT:-8443}:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./ssl:/etc/caddy/tls:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [inventory]
+
+  kafka:
+    image: apache/kafka:4.0.0
+    container_name: inventory_kafka
+    restart: unless-stopped
+    profiles: ["events"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    networks: [inventory]
+
+networks:
+  inventory:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

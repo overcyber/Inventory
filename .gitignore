@@ -1,0 +1,14 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+data/
+dist/
+build/
+*.egg-info/
+
+# ssl/key.pem and logs/ are intentionally NOT removed/ignored in this
+# repository revision per maintainer instruction.

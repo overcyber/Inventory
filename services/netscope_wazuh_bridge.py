@@ -219,47 +219,64 @@ def dedup_devices():
         return 0
     return _dedup_devices_locked()
 
-def _dedup_devices_locked():
+def _duplicate_index_keys(dev):
+    keys = []
+    ip = (dev.get('ip') or '').strip()
+    if ip and ip not in ('127.0.0.1', 'localhost'):
+        keys.append(('ip', ip))
+    prefix = _mac_prefix(dev.get('mac'))
+    subnet = (dev.get('subnet') or '').strip()
+    if prefix and subnet:
+        keys.append(('mac-prefix', prefix + '|' + subnet))
+    host = _norm_host(dev.get('hostname'))
+    if host:
+        keys.append(('hostname', host))
+    agent_id = str(dev.get('agent_id') or '').strip()
+    if agent_id:
+        keys.append(('agent-id', agent_id))
+    serial = str(dev.get('serial_number') or '').strip()
+    if serial:
+        keys.append(('serial', serial))
+    return keys
 
+
+def _dedup_devices_locked():
+    """Index-based deduplication; avoids the previous repeated O(n²) pair scan."""
     merged = 0
-    changed = True
-    while changed:
-        changed = False
-        active = [d for d in store._cache['devices'] if not d.get('deleted')]
-        for ii in range(len(active)):
-            if changed:
+    indexes = {}
+    active = [d for d in store._cache['devices'] if not d.get('deleted')]
+    for dev in active:
+        duplicate = None
+        reason = ''
+        for key in _duplicate_index_keys(dev):
+            if key in indexes:
+                duplicate = indexes[key]
+                reason = key[0]
                 break
-            a = active[ii]
-            for jj in range(ii + 1, len(active)):
-                b = active[jj]
-                reason = _dup(a, b)
-                if reason:
-                    keep, dup = (a, b) if _survivor_rank(a) <= _survivor_rank(b) else (b, a)
-                    dup_key = _merge_pair(keep, dup, reason)
-                    _remap_parents(dup_key, dev_key(keep))
-                    merged += 1
-                    changed = True
-                    break
+        if duplicate is None:
+            for key in _duplicate_index_keys(dev):
+                indexes[key] = dev
+            continue
+        keep, dup = ((duplicate, dev) if _survivor_rank(duplicate) <= _survivor_rank(dev)
+                     else (dev, duplicate))
+        dup_key = _merge_pair(keep, dup, reason)
+        _remap_parents(dup_key, dev_key(keep))
+        merged += 1
+        for key in _duplicate_index_keys(keep):
+            indexes[key] = keep
     return merged
 
-def find_duplicates():
 
-    act = store.active()
+def find_duplicates():
+    buckets = {}
+    for dev in store.active():
+        for key in _duplicate_index_keys(dev):
+            buckets.setdefault(key, []).append(dev_key(dev))
     groups = []
-    n = len(act)
-    for ii in range(n):
-        a = act[ii]
-        for jj in range(ii + 1, n):
-            b = act[jj]
-            reason = _dup(a, b)
-            if reason:
-                ka, kb = dev_key(a), dev_key(b)
-                for g in groups:
-                    if g['reason'] == reason and (ka in g['uids'] or kb in g['uids']):
-                        g['uids'].extend([u for u in (ka, kb) if u not in g['uids']])
-                        break
-                else:
-                    groups.append({'reason': reason, 'uids': [ka, kb]})
+    for (reason, _value), uids in buckets.items():
+        unique = list(dict.fromkeys(uids))
+        if len(unique) > 1:
+            groups.append({'reason': reason, 'uids': unique})
     return groups
 
 def duplicate_marks():

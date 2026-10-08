@@ -1,4 +1,5 @@
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
 
@@ -103,3 +104,196 @@ class NetscopeScanHistory(db.Model):
     udp_closed = db.Column(db.Integer, default=0)
     error = db.Column(db.Text, default='')
     results = db.Column(JSONB, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Asset Core v0.19 — canonical multi-source asset model.
+# HostInventory remains for backward compatibility during migration.
+# ---------------------------------------------------------------------------
+
+class Asset(db.Model):
+    __tablename__ = 'assets'
+    id = db.Column(db.Integer, primary_key=True)
+    asset_uuid = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    canonical_name = db.Column(db.String(255), nullable=False, index=True)
+    status = db.Column(db.String(32), nullable=False, default='Desconhecido', index=True)
+    agent_status = db.Column(db.String(32), nullable=False, default='unknown', index=True)
+    network_status = db.Column(db.String(32), nullable=False, default='unknown', index=True)
+    inventory_freshness_seconds = db.Column(db.Integer, nullable=True)
+    confidence = db.Column(db.Float, nullable=False, default=0.5)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    last_observed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    current_state = db.Column(JSONB, nullable=False, default=dict)
+
+    identifiers = db.relationship('AssetIdentifier', back_populates='asset',
+                                  cascade='all, delete-orphan')
+    observations = db.relationship('AssetObservation', back_populates='asset',
+                                   cascade='all, delete-orphan')
+
+
+class AssetIdentifier(db.Model):
+    __tablename__ = 'asset_identifiers'
+    __table_args__ = (
+        UniqueConstraint('kind', 'value', name='uq_asset_identifier_kind_value'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    kind = db.Column(db.String(64), nullable=False, index=True)
+    value = db.Column(db.String(512), nullable=False, index=True)
+    source = db.Column(db.String(64), nullable=False, default='unknown')
+    confidence = db.Column(db.Float, nullable=False, default=0.5)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    asset = db.relationship('Asset', back_populates='identifiers')
+
+
+class AssetObservation(db.Model):
+    __tablename__ = 'asset_observations'
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    source = db.Column(db.String(64), nullable=False, index=True)
+    external_id = db.Column(db.String(512), nullable=False, default='', index=True)
+    observed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False,
+                            index=True)
+    content_hash = db.Column(db.String(64), nullable=False, index=True)
+    raw_data = db.Column(JSONB, nullable=False, default=dict)
+    normalized_data = db.Column(JSONB, nullable=False, default=dict)
+    asset = db.relationship('Asset', back_populates='observations')
+
+
+class AssetSnapshot(db.Model):
+    __tablename__ = 'asset_snapshots'
+    id = db.Column(db.BigInteger, primary_key=True)
+    snapshot_uuid = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    observed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False,
+                            index=True)
+    source = db.Column(db.String(64), nullable=False, index=True)
+    state = db.Column(JSONB, nullable=False, default=dict)
+
+
+class AssetChange(db.Model):
+    __tablename__ = 'asset_changes'
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    observed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False,
+                            index=True)
+    source = db.Column(db.String(64), nullable=False, index=True)
+    path = db.Column(db.String(512), nullable=False, index=True)
+    old_value = db.Column(JSONB, nullable=False, default=dict)
+    new_value = db.Column(JSONB, nullable=False, default=dict)
+
+
+
+class AssetAddress(db.Model):
+    __tablename__ = 'asset_addresses'
+    __table_args__ = (UniqueConstraint('asset_id', 'address', 'source',
+                                       name='uq_asset_address_source'),)
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    address = db.Column(db.String(128), nullable=False, index=True)
+    family = db.Column(db.String(16), nullable=False, default='')
+    interface_name = db.Column(db.String(128), nullable=False, default='')
+    source = db.Column(db.String(64), nullable=False, index=True)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AssetInterface(db.Model):
+    __tablename__ = 'asset_interfaces'
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    name = db.Column(db.String(128), nullable=False, default='')
+    mac = db.Column(db.String(32), nullable=False, default='', index=True)
+    state = db.Column(db.String(32), nullable=False, default='')
+    mtu = db.Column(db.String(32), nullable=False, default='')
+    interface_type = db.Column(db.String(64), nullable=False, default='')
+    source = db.Column(db.String(64), nullable=False, index=True)
+    data = db.Column(JSONB, nullable=False, default=dict)
+
+
+class AssetHardware(db.Model):
+    __tablename__ = 'asset_hardware'
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    source = db.Column(db.String(64), nullable=False, index=True)
+    serial = db.Column(db.String(255), nullable=False, default='', index=True)
+    cpu_name = db.Column(db.String(512), nullable=False, default='')
+    cpu_cores = db.Column(db.String(32), nullable=False, default='')
+    ram_total = db.Column(db.BigInteger, nullable=True)
+    data = db.Column(JSONB, nullable=False, default=dict)
+
+
+class AssetSoftware(db.Model):
+    __tablename__ = 'asset_software'
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    source = db.Column(db.String(64), nullable=False, index=True)
+    name = db.Column(db.String(512), nullable=False, index=True)
+    version = db.Column(db.String(255), nullable=False, default='')
+    architecture = db.Column(db.String(128), nullable=False, default='')
+    package_format = db.Column(db.String(64), nullable=False, default='')
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AssetProcess(db.Model):
+    __tablename__ = 'asset_processes'
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    source = db.Column(db.String(64), nullable=False, index=True)
+    pid = db.Column(db.String(32), nullable=False, default='')
+    name = db.Column(db.String(512), nullable=False, default='', index=True)
+    user_name = db.Column(db.String(255), nullable=False, default='')
+    command = db.Column(db.Text, nullable=False, default='')
+    state = db.Column(db.String(64), nullable=False, default='')
+
+
+class AssetService(db.Model):
+    __tablename__ = 'asset_services'
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    source = db.Column(db.String(64), nullable=False, index=True)
+    name = db.Column(db.String(512), nullable=False, default='', index=True)
+    state = db.Column(db.String(64), nullable=False, default='')
+    start_type = db.Column(db.String(128), nullable=False, default='')
+    data = db.Column(JSONB, nullable=False, default=dict)
+
+
+class AssetPort(db.Model):
+    __tablename__ = 'asset_ports'
+    id = db.Column(db.BigInteger, primary_key=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey('assets.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    source = db.Column(db.String(64), nullable=False, index=True)
+    protocol = db.Column(db.String(16), nullable=False, default='')
+    address = db.Column(db.String(128), nullable=False, default='')
+    port = db.Column(db.Integer, nullable=True, index=True)
+    state = db.Column(db.String(64), nullable=False, default='')
+    process_name = db.Column(db.String(512), nullable=False, default='')
+    pid = db.Column(db.String(32), nullable=False, default='')
+
+
+
+class InventorySourceState(db.Model):
+    __tablename__ = 'inventory_source_states'
+    id = db.Column(db.Integer, primary_key=True)
+    source = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    enabled = db.Column(db.Boolean, default=False, nullable=False)
+    last_run = db.Column(db.DateTime, nullable=True)
+    last_success = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(32), nullable=False, default='unknown')
+    last_error = db.Column(db.Text, nullable=False, default='')
+    metadata_json = db.Column(JSONB, nullable=False, default=dict)

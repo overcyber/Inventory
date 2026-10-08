@@ -46,7 +46,7 @@ command -v apt-get >/dev/null 2>&1 \
   || die "Este script usa apt (Debian/Ubuntu). Instale as dependências manualmente em outra distro."
 
 printf '\n'
-msg "═══ INVENTORY — instalação (v0.18.9) ═══"
+msg "═══ INVENTORY — instalação (v0.19.0) ═══"
 msg "Pasta de destino: $APP_DIR"
 
 msg "[1/9] Dependências do sistema (apt)…"
@@ -111,12 +111,31 @@ else
   ok ".env existente preservado"
 fi
 get_env() { grep -E "^$1=" .env 2>/dev/null | tail -n1 | cut -d= -f2- ; }
-DB_USER="$(get_env DB_USER)";        DB_USER="${DB_USER:-inventorydb}"
-DB_PASS="$(get_env DB_PASS)";        DB_PASS="${DB_PASS:-senhadoinventorydb}"
-DB_NAME="$(get_env DB_NAME)";        DB_NAME="${DB_NAME:-inventory_db}"
-APP_PORT="$(get_env PORT)";          APP_PORT="${APP_PORT:-8000}"
-ADMIN_PASSWORD_ENV="$(get_env ADMIN_PASSWORD)"; ADMIN_PASSWORD_ENV="${ADMIN_PASSWORD_ENV:-Meuadmin123}"
-warn "revise .env → WAZUH_HOST/WAZUH_USER/WAZUH_PASSWORD (API do Wazuh) e DB_PASS (senha do banco)"
+set_env() {
+  local key="$1" value="$2"
+  if grep -qE "^$key=" .env; then
+    sed -i "s|^$key=.*|$key=$value|" .env
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> .env
+  fi
+}
+DB_USER="$(get_env DB_USER)"; DB_USER="${DB_USER:-inventorydb}"
+DB_PASS="$(get_env DB_PASS)"
+if [ -z "$DB_PASS" ] || [ "$DB_PASS" = "senhadoinventorydb" ]; then
+  DB_PASS="$(openssl rand -base64 36 | tr -d '\n/=+' | cut -c1-32)"
+  set_env DB_PASS "$DB_PASS"
+  ok "DB_PASS forte gerado automaticamente"
+fi
+DB_NAME="$(get_env DB_NAME)"; DB_NAME="${DB_NAME:-inventory_db}"
+APP_PORT="$(get_env PORT)"; APP_PORT="${APP_PORT:-8000}"
+ADMIN_PASSWORD_ENV="$(get_env ADMIN_PASSWORD)"
+if [ -z "$ADMIN_PASSWORD_ENV" ] || [ "$ADMIN_PASSWORD_ENV" = "Meuadmin123" ]; then
+  ADMIN_PASSWORD_ENV="$(openssl rand -base64 30 | tr -d '\n/=+' | cut -c1-24)"
+  set_env ADMIN_PASSWORD "$ADMIN_PASSWORD_ENV"
+  set_env ADMIN_MUST_CHANGE_PASSWORD "true"
+  ok "ADMIN_PASSWORD forte gerada; troca obrigatória no primeiro login"
+fi
+warn "revise .env → fontes habilitadas (Wazuh/osquery/SNMP/SSH/WinRM), CA TLS e integrações"
 
 msg "[5/9] Certificados TLS…"
 if [ -f ssl/cert.pem ] && [ -f ssl/key.pem ]; then
@@ -150,8 +169,8 @@ sudo -u "$APP_USER" .venv/bin/pip install -r requirements.txt >/dev/null
 ok "dependências Python instaladas"
 
 msg "[8/9] Subindo PostgreSQL + Redis (docker compose)…"
-docker compose up -d
-ok "containers disparados (inventory_postgres, inventory_redis)"
+docker compose up -d db cache
+ok "containers de infraestrutura disparados (inventory_postgres, inventory_redis)"
 
 msg "      aguardando o PostgreSQL aceitar conexões…"
 DB_OK=0

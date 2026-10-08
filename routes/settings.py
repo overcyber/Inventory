@@ -201,7 +201,7 @@ def update_discovery():
 
 
 def _scheduled_sync():
-    """Callback do job — mesma composição da v0.17 (Wazuh + ponte NetScope).
+    """Callback do job — sincronização multifuente + correlação Wazuh/NetScope.
 
     v0.18.29 FIX — "Working outside of application context": o job roda
     na thread do APScheduler, onde NÃO existe contexto Flask. Antes o
@@ -385,7 +385,7 @@ def save_dashboard_layout():
 @admin_required
 def sync_now():
     """v0.18.18 — o botão "Sincronizar Agora" faz AS 3 AÇÕES (pedido do
-    usuário): sync Wazuh + Ping Sweep + ARP Discovery, em sequência, na
+    usuário): sincronização multifuente + Ping Sweep + Active ARP Discovery, em sequência, na
     thread de fundo (core.app.run_full_sync). Redes não configuradas
     pulam ping/arp graciosamente; cada etapa isola a própria falha.
     v0.18.21 — devolve também `seq` (identificador do disparo): a UI
@@ -408,8 +408,8 @@ def sync_now():
         shared_cache.invalidate('machines', 'stats')
 
         app.logger.info("Sincronização manual disparada pelo administrador "
-                        "(ações: sync Wazuh + Ping Sweep + ARP Discovery).")
-        return jsonify(success=True, actions=['sync', 'ping', 'arp'], seq=seq)
+                        "(ações: fontes configuradas + Ping Sweep + Active ARP Discovery).")
+        return jsonify(success=True, actions=['sources', 'ping', 'arp-active'], seq=seq)
     except Exception as e:
         app.logger.error(f"Erro ao disparar sincronização manual: {e}")
         try:
