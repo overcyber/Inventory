@@ -115,7 +115,8 @@ class SNMPSource(InventorySource):
     OIDS={'sys_name':'1.3.6.1.2.1.1.5.0','sys_descr':'1.3.6.1.2.1.1.1.0','sys_location':'1.3.6.1.2.1.1.6.0',
           'if_descr':'1.3.6.1.2.1.2.2.1.2','if_phys':'1.3.6.1.2.1.2.2.1.6','if_status':'1.3.6.1.2.1.2.2.1.8',
           'dot1q_pvid':'1.3.6.1.2.1.17.7.1.4.5.1.1','fdb_address':'1.3.6.1.2.1.17.4.3.1.1',
-          'fdb_port':'1.3.6.1.2.1.17.4.3.1.2'}
+          'fdb_port':'1.3.6.1.2.1.17.4.3.1.2',
+          'bridge_ifindex':'1.3.6.1.2.1.17.1.4.1.2'}
     def enabled(self): return env_bool('SNMP_ENABLED',False)
     def _walk(self,target,oid):
         binary=os.getenv('SNMPWALK_BINARY','snmpwalk')
@@ -128,6 +129,50 @@ class SNMPSource(InventorySource):
             m=re.match(r'\.?([\d.]+)\s*=\s*(?:\w+:\s*)?(.*)$',line.strip())
             if m: out[m.group(1)]=m.group(2).strip().strip('"')
         return out
+    @staticmethod
+    def _mac_value(value):
+        compact=re.sub(r'[^0-9A-Fa-f]','',str(value or ''))
+        if len(compact)!=12:
+            return ''
+        return ':'.join(compact[i:i+2] for i in range(0,12,2)).lower()
+    def _enrich_netscope(self,host,raw,indexes=None):
+        try:
+            from services.netscope_core import store, dev_key
+            switch=store.find_by_ip(host,include_deleted=False)
+            if not switch:
+                return 0
+            switch_key=dev_key(switch)
+            fdb_ports=raw.get('fdb_port') or {}
+            ifindexes=raw.get('bridge_ifindex') or {}
+            pvids=raw.get('dot1q_pvid') or {}
+            changed=0
+            for oid,value in (raw.get('fdb_address') or {}).items():
+                mac=self._mac_value(value)
+                if not mac:
+                    continue
+                suffix=oid.split('1.3.6.1.2.1.17.4.3.1.1.',1)[-1]
+                port_raw=next((v for k,v in fdb_ports.items() if k.endswith('.'+suffix)),None)
+                try: bridge_port=int(re.sub(r'[^0-9]','',str(port_raw or '')))
+                except ValueError: continue
+                ifidx_raw=next((v for k,v in ifindexes.items() if k.endswith('.'+str(bridge_port))),None)
+                try: ifidx=int(re.sub(r'[^0-9]','',str(ifidx_raw or bridge_port)))
+                except ValueError: ifidx=bridge_port
+                iface=(indexes or {}).get(str(ifidx),{})
+                pvid_raw=next((v for k,v in pvids.items() if k.endswith('.'+str(bridge_port))), '')
+                vlan=re.sub(r'[^0-9]','',str(pvid_raw or ''))
+                dev=store.find(mac,include_deleted=False)
+                if not dev or dev is switch:
+                    continue
+                dev['switch_port']={'switch_mac':switch_key,'port':bridge_port,
+                                    'label':iface.get('name') or f'port-{bridge_port}',
+                                    'vlan':vlan,'speed':'','duplex':''}
+                changed+=1
+            if changed:
+                with store._lock:
+                    store._flush()
+            return changed
+        except Exception:
+            return 0
     def collect(self,app):
         observed=errors=0
         for target in _json_env('SNMP_TARGETS_JSON',[]):
@@ -145,7 +190,9 @@ class SNMPSource(InventorySource):
                          'network_status':'reachable','device_status':'Ativo','confidence':0.82,
                          'location':next(iter(raw['sys_location'].values()),''),
                          'inventory':{'netiface':interfaces,'snmp':raw,'fdb':{'address':raw['fdb_address'],'port':raw['fdb_port']}}}
-                ingest_observation(self.name,host,raw,generic_payload_to_state(payload,self.name,host)); observed+=1
+                ingest_observation(self.name,host,raw,generic_payload_to_state(payload,self.name,host))
+                self._enrich_netscope(host,raw,indexes=idxs)
+                observed+=1
             except Exception as exc: app.logger.warning('[SNMP] %s: %s',host,exc); errors+=1
         return SourceResult(self.name,observed,errors)
 
