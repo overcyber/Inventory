@@ -131,7 +131,10 @@ class SNMPSource(InventorySource):
         return out
     @staticmethod
     def _mac_value(value):
-        compact=re.sub(r'[^0-9A-Fa-f]','',str(value or ''))
+        text=str(value or '').strip()
+        if ':' in text and text.lower().startswith(('hex-string','hex string')):
+            text=text.split(':',1)[1]
+        compact=''.join(ch for ch in text if ch.lower() in '0123456789abcdef')
         if len(compact)!=12:
             return ''
         return ':'.join(compact[i:i+2] for i in range(0,12,2)).lower()
