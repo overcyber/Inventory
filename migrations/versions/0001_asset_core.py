@@ -4,6 +4,7 @@ Revision ID: 0001_asset_core
 Revises: None
 """
 from alembic import op
+from sqlalchemy import inspect
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -12,8 +13,20 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
+def _create_table_if_missing(name, *columns, **kwargs):
+    if inspect(op.get_bind()).has_table(name):
+        return
+    op.create_table(name, *columns, **kwargs)
+
+
+def _create_index_if_missing(name, table, columns, **kwargs):
+    indexes = {index['name'] for index in inspect(op.get_bind()).get_indexes(table)}
+    if name not in indexes:
+        op.create_index(name, table, columns, **kwargs)
+
+
 def upgrade():
-    op.create_table('assets',
+    _create_table_if_missing('assets',
         sa.Column('id', sa.Integer(), primary_key=True),
         sa.Column('asset_uuid', sa.String(36), nullable=False, unique=True),
         sa.Column('canonical_name', sa.String(255), nullable=False),
@@ -27,10 +40,10 @@ def upgrade():
         sa.Column('last_observed_at', sa.DateTime(), nullable=False),
         sa.Column('active', sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column('current_state', postgresql.JSONB(astext_type=sa.Text()), nullable=False))
-    op.create_index('ix_assets_asset_uuid', 'assets', ['asset_uuid'], unique=True)
-    op.create_index('ix_assets_canonical_name', 'assets', ['canonical_name'])
-    op.create_index('ix_assets_last_seen', 'assets', ['last_seen'])
-    op.create_table('asset_identifiers',
+    _create_index_if_missing('ix_assets_asset_uuid', 'assets', ['asset_uuid'], unique=True)
+    _create_index_if_missing('ix_assets_canonical_name', 'assets', ['canonical_name'])
+    _create_index_if_missing('ix_assets_last_seen', 'assets', ['last_seen'])
+    _create_table_if_missing('asset_identifiers',
         sa.Column('id', sa.Integer(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('kind', sa.String(64), nullable=False),
@@ -40,9 +53,9 @@ def upgrade():
         sa.Column('first_seen', sa.DateTime(), nullable=False),
         sa.Column('last_seen', sa.DateTime(), nullable=False),
         sa.UniqueConstraint('kind', 'value', name='uq_asset_identifier_kind_value'))
-    op.create_index('ix_asset_identifiers_asset_id', 'asset_identifiers', ['asset_id'])
-    op.create_index('ix_asset_identifiers_kind_value', 'asset_identifiers', ['kind', 'value'])
-    op.create_table('asset_observations',
+    _create_index_if_missing('ix_asset_identifiers_asset_id', 'asset_identifiers', ['asset_id'])
+    _create_index_if_missing('ix_asset_identifiers_kind_value', 'asset_identifiers', ['kind', 'value'])
+    _create_table_if_missing('asset_observations',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('source', sa.String(64), nullable=False),
@@ -51,18 +64,18 @@ def upgrade():
         sa.Column('content_hash', sa.String(64), nullable=False),
         sa.Column('raw_data', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column('normalized_data', postgresql.JSONB(astext_type=sa.Text()), nullable=False))
-    op.create_index('ix_asset_observations_asset_id', 'asset_observations', ['asset_id'])
-    op.create_index('ix_asset_observations_source_external', 'asset_observations', ['source', 'external_id'])
-    op.create_index('ix_asset_observations_content_hash', 'asset_observations', ['content_hash'])
-    op.create_table('asset_snapshots',
+    _create_index_if_missing('ix_asset_observations_asset_id', 'asset_observations', ['asset_id'])
+    _create_index_if_missing('ix_asset_observations_source_external', 'asset_observations', ['source', 'external_id'])
+    _create_index_if_missing('ix_asset_observations_content_hash', 'asset_observations', ['content_hash'])
+    _create_table_if_missing('asset_snapshots',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('snapshot_uuid', sa.String(36), nullable=False, unique=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('observed_at', sa.DateTime(), nullable=False),
         sa.Column('source', sa.String(64), nullable=False),
         sa.Column('state', postgresql.JSONB(astext_type=sa.Text()), nullable=False))
-    op.create_index('ix_asset_snapshots_asset_id', 'asset_snapshots', ['asset_id'])
-    op.create_table('asset_changes',
+    _create_index_if_missing('ix_asset_snapshots_asset_id', 'asset_snapshots', ['asset_id'])
+    _create_table_if_missing('asset_changes',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('observed_at', sa.DateTime(), nullable=False),
@@ -70,10 +83,10 @@ def upgrade():
         sa.Column('path', sa.String(512), nullable=False),
         sa.Column('old_value', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column('new_value', postgresql.JSONB(astext_type=sa.Text()), nullable=False))
-    op.create_index('ix_asset_changes_asset_id', 'asset_changes', ['asset_id'])
-    op.create_index('ix_asset_changes_observed_at', 'asset_changes', ['observed_at'])
-    op.create_index('ix_asset_changes_path', 'asset_changes', ['path'])
-    op.create_table('asset_addresses',
+    _create_index_if_missing('ix_asset_changes_asset_id', 'asset_changes', ['asset_id'])
+    _create_index_if_missing('ix_asset_changes_observed_at', 'asset_changes', ['observed_at'])
+    _create_index_if_missing('ix_asset_changes_path', 'asset_changes', ['path'])
+    _create_table_if_missing('asset_addresses',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('address', sa.String(128), nullable=False),
@@ -83,10 +96,10 @@ def upgrade():
         sa.Column('first_seen', sa.DateTime(), nullable=False),
         sa.Column('last_seen', sa.DateTime(), nullable=False),
         sa.UniqueConstraint('asset_id', 'address', 'source', name='uq_asset_address_source'))
-    op.create_index('ix_asset_addresses_asset_id', 'asset_addresses', ['asset_id'])
-    op.create_index('ix_asset_addresses_address', 'asset_addresses', ['address'])
+    _create_index_if_missing('ix_asset_addresses_asset_id', 'asset_addresses', ['asset_id'])
+    _create_index_if_missing('ix_asset_addresses_address', 'asset_addresses', ['address'])
 
-    op.create_table('asset_interfaces',
+    _create_table_if_missing('asset_interfaces',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('name', sa.String(128), nullable=False, server_default=''),
@@ -96,10 +109,10 @@ def upgrade():
         sa.Column('interface_type', sa.String(64), nullable=False, server_default=''),
         sa.Column('source', sa.String(64), nullable=False),
         sa.Column('data', postgresql.JSONB(astext_type=sa.Text()), nullable=False))
-    op.create_index('ix_asset_interfaces_asset_id', 'asset_interfaces', ['asset_id'])
-    op.create_index('ix_asset_interfaces_mac', 'asset_interfaces', ['mac'])
+    _create_index_if_missing('ix_asset_interfaces_asset_id', 'asset_interfaces', ['asset_id'])
+    _create_index_if_missing('ix_asset_interfaces_mac', 'asset_interfaces', ['mac'])
 
-    op.create_table('asset_hardware',
+    _create_table_if_missing('asset_hardware',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('source', sa.String(64), nullable=False),
@@ -108,10 +121,10 @@ def upgrade():
         sa.Column('cpu_cores', sa.String(32), nullable=False, server_default=''),
         sa.Column('ram_total', sa.BigInteger()),
         sa.Column('data', postgresql.JSONB(astext_type=sa.Text()), nullable=False))
-    op.create_index('ix_asset_hardware_asset_id', 'asset_hardware', ['asset_id'])
-    op.create_index('ix_asset_hardware_serial', 'asset_hardware', ['serial'])
+    _create_index_if_missing('ix_asset_hardware_asset_id', 'asset_hardware', ['asset_id'])
+    _create_index_if_missing('ix_asset_hardware_serial', 'asset_hardware', ['serial'])
 
-    op.create_table('asset_software',
+    _create_table_if_missing('asset_software',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('source', sa.String(64), nullable=False),
@@ -121,10 +134,10 @@ def upgrade():
         sa.Column('package_format', sa.String(64), nullable=False, server_default=''),
         sa.Column('first_seen', sa.DateTime(), nullable=False),
         sa.Column('last_seen', sa.DateTime(), nullable=False))
-    op.create_index('ix_asset_software_asset_id', 'asset_software', ['asset_id'])
-    op.create_index('ix_asset_software_name', 'asset_software', ['name'])
+    _create_index_if_missing('ix_asset_software_asset_id', 'asset_software', ['asset_id'])
+    _create_index_if_missing('ix_asset_software_name', 'asset_software', ['name'])
 
-    op.create_table('asset_processes',
+    _create_table_if_missing('asset_processes',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('source', sa.String(64), nullable=False),
@@ -133,10 +146,10 @@ def upgrade():
         sa.Column('user_name', sa.String(255), nullable=False, server_default=''),
         sa.Column('command', sa.Text(), nullable=False, server_default=''),
         sa.Column('state', sa.String(64), nullable=False, server_default=''))
-    op.create_index('ix_asset_processes_asset_id', 'asset_processes', ['asset_id'])
-    op.create_index('ix_asset_processes_name', 'asset_processes', ['name'])
+    _create_index_if_missing('ix_asset_processes_asset_id', 'asset_processes', ['asset_id'])
+    _create_index_if_missing('ix_asset_processes_name', 'asset_processes', ['name'])
 
-    op.create_table('asset_services',
+    _create_table_if_missing('asset_services',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('source', sa.String(64), nullable=False),
@@ -144,10 +157,10 @@ def upgrade():
         sa.Column('state', sa.String(64), nullable=False, server_default=''),
         sa.Column('start_type', sa.String(128), nullable=False, server_default=''),
         sa.Column('data', postgresql.JSONB(astext_type=sa.Text()), nullable=False))
-    op.create_index('ix_asset_services_asset_id', 'asset_services', ['asset_id'])
-    op.create_index('ix_asset_services_name', 'asset_services', ['name'])
+    _create_index_if_missing('ix_asset_services_asset_id', 'asset_services', ['asset_id'])
+    _create_index_if_missing('ix_asset_services_name', 'asset_services', ['name'])
 
-    op.create_table('asset_ports',
+    _create_table_if_missing('asset_ports',
         sa.Column('id', sa.BigInteger(), primary_key=True),
         sa.Column('asset_id', sa.Integer(), sa.ForeignKey('assets.id', ondelete='CASCADE'), nullable=False),
         sa.Column('source', sa.String(64), nullable=False),
@@ -157,10 +170,10 @@ def upgrade():
         sa.Column('state', sa.String(64), nullable=False, server_default=''),
         sa.Column('process_name', sa.String(512), nullable=False, server_default=''),
         sa.Column('pid', sa.String(32), nullable=False, server_default=''))
-    op.create_index('ix_asset_ports_asset_id', 'asset_ports', ['asset_id'])
-    op.create_index('ix_asset_ports_port', 'asset_ports', ['port'])
+    _create_index_if_missing('ix_asset_ports_asset_id', 'asset_ports', ['asset_id'])
+    _create_index_if_missing('ix_asset_ports_port', 'asset_ports', ['port'])
 
-    op.create_table('inventory_source_states',
+    _create_table_if_missing('inventory_source_states',
         sa.Column('id', sa.Integer(), primary_key=True),
         sa.Column('source', sa.String(64), nullable=False, unique=True),
         sa.Column('enabled', sa.Boolean(), nullable=False, server_default=sa.false()),

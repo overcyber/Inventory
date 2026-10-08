@@ -178,7 +178,7 @@ def identity_candidates(state: dict, source: str, external_id: str = ''):
         add('wazuh_agent_id', state.get('wazuh_agent_id') or external_id, 0.99)
     for mac in state.get('macs') or []:
         add('mac', normalize_mac(mac), 0.97)
-    add('hostname', normalize_hostname(state.get('hostname')), 0.70)
+    # Hostnames are mutable aliases, never globally unique identifiers.
     if external_id:
         add(f'{source}_external_id', external_id, 0.90)
     return out
@@ -249,7 +249,13 @@ def _merge_state(current: dict, incoming: dict, source: str) -> dict:
 
 
 def _resolve_asset(state: dict, source: str, external_id: str = ''):
-    for kind, value, _confidence in identity_candidates(state, source, external_id):
+    candidates = identity_candidates(state, source, external_id)
+    # No hostname-only auto-merge; same-source external ID is strongest.
+    ordered = sorted((c for c in candidates if c[0] != 'hostname'),
+                     key=lambda c: (0 if c[0] == f'{source}_external_id'
+                                    else 1 if c[0] in ('serial', 'machine_id',
+                                    'cloud_instance_id', 'wazuh_agent_id') else 2))
+    for kind, value, _confidence in ordered:
         ident = AssetIdentifier.query.filter_by(kind=kind, value=value).first()
         if ident and ident.asset:
             return ident.asset
@@ -422,7 +428,15 @@ def ingest_observation(source: str, external_id: str, raw_data: dict,
                            content_hash=digest)
                 .order_by(AssetObservation.id.desc()).first())
     if existing and existing.asset:
-        return existing.asset
+        asset = existing.asset
+        asset.last_seen = max(asset.last_seen or observed_at, observed_at)
+        asset.last_observed_at = max(asset.last_observed_at or observed_at, observed_at)
+        asset.active = True
+        for ident in asset.identifiers:
+            if ident.source == source:
+                ident.last_seen = max(ident.last_seen or observed_at, observed_at)
+        db.session.commit()
+        return asset
     asset = _resolve_asset(normalized, source, external_id)
     old = copy.deepcopy(asset.current_state or {})
     merged = _merge_state(old, normalized, source)

@@ -59,6 +59,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./ssl:/app/ssl:ro
     networks: [inventory]
 
   inventory-worker:
