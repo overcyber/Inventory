@@ -2,8 +2,8 @@
     redir https://{$INVENTORY_TLS_HOST:localhost}:{$INVENTORY_TLS_PUBLIC_PORT:8443}{uri} permanent
 }
 
-https://{$INVENTORY_TLS_HOST:localhost}:8443 {
-    tls internal
+:8443 {
+    tls /etc/caddy/tls/cert.pem /etc/caddy/tls/key.pem
     encode zstd gzip
     reverse_proxy inventory-web:8000
 }

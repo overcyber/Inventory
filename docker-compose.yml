@@ -147,11 +147,25 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
 
+  cert-init:
+    build:
+      context: .
+      network: host
+    container_name: inventory_cert_init
+    restart: "no"
+    env_file: .env
+    user: "0:0"
+    command: ["/app/scripts/ensure_tls_cert.sh"]
+    volumes:
+      - ./ssl:/app/ssl
+
   caddy:
     image: caddy:2-alpine
     container_name: inventory_caddy
     restart: unless-stopped
-    depends_on: [inventory-web]
+    depends_on:
+      inventory-web: {condition: service_healthy}
+      cert-init: {condition: service_completed_successfully}
     environment:
       INVENTORY_TLS_HOST: ${INVENTORY_TLS_HOST:-localhost}
       INVENTORY_TLS_PUBLIC_PORT: ${HTTPS_PORT:-8443}
@@ -170,7 +184,9 @@ services:
     container_name: inventory_caddy_mtls
     restart: unless-stopped
     profiles: ["mtls"]
-    depends_on: [inventory-web]
+    depends_on:
+      inventory-web: {condition: service_healthy}
+      cert-init: {condition: service_completed_successfully}
     environment:
       INVENTORY_TLS_HOST: ${INVENTORY_TLS_HOST:-localhost}
     ports:

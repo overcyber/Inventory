@@ -54,6 +54,18 @@ jobs:
         run: alembic upgrade head
       - name: Validate migration idempotency
         run: alembic upgrade head
+      - name: Validate TLS certificate bootstrap
+        run: |
+          tmpdir="$(mktemp -d)"
+          SSL_DIR="$tmpdir" INVENTORY_TLS_HOST=127.0.0.1 INVENTORY_TLS_ALT_NAMES=inventory.local scripts/ensure_tls_cert.sh
+          openssl x509 -in "$tmpdir/cert.pem" -noout -checkip 127.0.0.1
+          openssl x509 -in "$tmpdir/cert.pem" -noout -checkhost inventory.local
+          openssl verify -CAfile "$tmpdir/ca.pem" "$tmpdir/cert.pem"
+          first_sha="$(sha256sum "$tmpdir/cert.pem" | awk '{print $1}')"
+          SSL_DIR="$tmpdir" INVENTORY_TLS_HOST=127.0.0.1 INVENTORY_TLS_ALT_NAMES=inventory.local scripts/ensure_tls_cert.sh
+          second_sha="$(sha256sum "$tmpdir/cert.pem" | awk '{print $1}')"
+          test "$first_sha" = "$second_sha"
+          rm -rf "$tmpdir"
       - name: Validate Docker Compose
         env:
           DB_PASS: inventory_test_password
