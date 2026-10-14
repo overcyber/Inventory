@@ -754,6 +754,8 @@ function buildLinks() {
       source: child, target: parent, key: sortKey,
       pidx: idx, pcnt: cnt,
       inferred: d.parent_inferred, confidence: d.parent_confidence,
+      relation: d.parent_relation || (d.parent_inferred ? 'legacy' : 'manual'),
+      evidence: d.parent_evidence || '',
       port_label: sp ? (sp.label || ('P' + sp.port)) : '',
       port_num: sp ? sp.port : null,
       vlan: sp ? sp.vlan : '',
@@ -805,8 +807,12 @@ function updateGraph() {
   const linkEls = gLinks.selectAll('path.link-el')
     .data(links, linkKey)
     .join(
-      enter => enter.append('path').attr('class', d => 'link link-el' + (d.inferred ? ' inferred' : '')),
-      update => update.attr('class', d => 'link link-el' + (d.inferred ? ' inferred' : '')),
+      enter => enter.append('path').attr('class', d => 'link link-el' + (d.inferred ? ' inferred' : '') +
+        (d.relation === 'logical-gateway' ? ' link-logical-gateway' :
+         d.relation === 'physical-configured' ? ' link-switch-configured' : '')),
+      update => update.attr('class', d => 'link link-el' + (d.inferred ? ' inferred' : '') +
+        (d.relation === 'logical-gateway' ? ' link-logical-gateway' :
+         d.relation === 'physical-configured' ? ' link-switch-configured' : '')),
       exit => exit.remove()
     );
 
@@ -1096,6 +1102,11 @@ function showPopover(node) {
   const ports = node.open_ports || [];
   const parent = node.parent_id ? (S.devices.find(p => p.id === node.parent_id)?.name || node.parent_id) : t('Nenhum');
   const pCls = node.parent_inferred ? 'val inferred' : 'val';
+  const parentType = node.parent_relation === 'logical-gateway'
+    ? 'Associação lógica ao gateway configurado (não é conexão física)'
+    : node.parent_relation === 'physical-configured'
+      ? 'Porta de switch configurada (não verificada por LLDP)'
+      : node.parent_inferred ? 'Associação inferida' : 'Associação manual';
   const sp = node.switch_port || null;
   const swName = sp ? (S.devices.find(d => d.id === sp.switch_mac)?.name || sp.switch_mac) : '';
   const agYes = !!node.has_agent;
@@ -1124,7 +1135,8 @@ function showPopover(node) {
     (node.discovery === 'arp'
       ? '<div class="pop-row"><span class="lbl"><i class="fas fa-tower-broadcast"></i> ' + t('Descoberta') + '</span><span class="val"><span class="arp-tag">ARP</span> ' + t('via ARP (não responde ping)') + '</span></div>'
       : '') +
-    '<div class="pop-row"><span class="lbl">' + t('Pai') + '</span><span class="' + pCls + '">' + esc(parent) + (node.parent_inferred ? ' (' + node.parent_confidence + '%)' : '') + '</span></div>';
+    '<div class="pop-row"><span class="lbl">' + t('Pai') + '</span><span class="' + pCls + '">' + esc(parent) + '</span></div>' +
+    (node.parent_id ? '<div class="pop-row"><span class="lbl">Evidência</span><span class="val" title="' + esc(node.parent_evidence || '') + '">' + esc(parentType) + '</span></div>' : '');
   if (agYes && node.agent_last_keepalive) {
     html += '<div class="pop-row"><span class="lbl">KeepAlive</span><span class="val">' + esc(fmtDate(node.agent_last_keepalive)) + '</span></div>';
   }
@@ -2140,10 +2152,56 @@ $('btn-scan').onclick = async () => {
 };
 
 $('btn-infer').onclick = async () => {
-  const btn = $('btn-infer'); setBtnLoading(btn, true);
-  const r = await api('/netscope/api/infer', { method: 'POST' }); setBtnLoading(btn, false);
-  if (r.error) { toast(t('Falha: {e}', {e: r.error}), 'err'); return; }
-  toast(r.changed ? t('{n} conexões inferidas', {n: r.changed}) : t('Nada alterado'), r.changed ? 'ok' : 'warn'); loadDevices();
+  const btn = $('btn-infer');
+  setBtnLoading(btn, true);
+  try {
+    const preview = await api('/netscope/api/infer', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({preview: true})
+    });
+    if (preview.error) {
+      toast(t('Falha: {e}', {e: preview.error}), 'err');
+      return;
+    }
+    const summary = 'Portas de switch configuradas: ' +
+      (preview.physical_configured || 0) + '\n' +
+      'Associações lógicas aos gateways: ' +
+      (preview.logical_gateway || 0) + '\n' +
+      'Vínculos manuais preservados: ' +
+      (preview.manual_preserved || 0) + '\n' +
+      'Sem evidência suficiente: ' +
+      (preview.unresolved || 0) + '\n' +
+      'Vínculos inferidos antigos a remover: ' +
+      (preview.cleared || 0);
+    if (!preview.changed) {
+      toast('Inferência sem alterações. ' + summary.replace(/\n/g, ' | '), 'warn');
+      return;
+    }
+    if (!window.confirm(
+        'Prévia da topologia:\n\n' + summary +
+        '\n\nAplicar ' + preview.changed + ' alteração(ões)?' +
+        '\n(Nenhum vínculo manual será alterado.)')) {
+      return;
+    }
+    const result = await api('/netscope/api/infer', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({preview: false})
+    });
+    if (result.error) {
+      toast(t('Falha: {e}', {e: result.error}), 'err');
+      return;
+    }
+    toast('Topologia atualizada: ' + (result.changed || 0) + ' alterações. ' +
+          (result.physical_configured || 0) + ' ligações de switch configuradas; ' +
+          (result.logical_gateway || 0) + ' associações lógicas de gateway.', 'ok');
+    if (result.conflicts || result.cycles_prevented) {
+      toast('Ignorados: ' + (result.conflicts || 0) + ' vínculos ambíguos e ' +
+            (result.cycles_prevented || 0) + ' ciclos.', 'warn');
+    }
+    await loadDevices();
+  } finally {
+    setBtnLoading(btn, false);
+  }
 };
 
 $('btn-subnet-add').onclick = async () => {

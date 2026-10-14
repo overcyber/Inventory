@@ -1032,24 +1032,49 @@ class Store:
             self._flush()
             return True, 200
 
-    def infer_links(self, cfg):
-        """Remove speculative L2 links; IP proximity is not topology proof.
+    def infer_links(self, cfg, details=False, dry_run=False):
+        """Infer evidenced switch-port and logical gateway associations.
 
-        Physical parent relationships require a trusted observation (e.g.,
-        LLDP/CDP, switch port/FDB). Preserve manually assigned links.
+        Never infer physical cabling from IP proximity. Preserve manually
+        created links, and replace only previously inferred relationships.
         """
+        from services.netscope_topology import infer_topology
+
         with self._lock:
-            self._load()
+            # A different worker may have updated inventory since our cache
+            # was loaded. Force a fresh snapshot before topology inference.
+            self._cache_loaded_at = 0.0
+            devices = self._load()['devices']
+            plan, summary = infer_topology(devices, cfg)
             changed = 0
-            for d in self._cache['devices']:
-                if d.get('deleted') or not d.get('parent_inferred'):
+            cleared = 0
+            for device in devices:
+                if device.get('deleted'):
                     continue
-                d['parent_id'] = None
-                d['parent_inferred'] = False
-                d.pop('parent_confidence', None)
-                changed += 1
-            if changed:
+                if device.get('parent_id') and not device.get('parent_inferred'):
+                    continue  # Manual links are authoritative.
+                identifier = dev_key(device)
+                proposal = plan.get(identifier)
+                if proposal is None:
+                    if device.get('parent_inferred'):
+                        if not dry_run:
+                            device['parent_id'] = None
+                            device['parent_inferred'] = False
+                            device['parent_confidence'] = 0
+                            device.pop('parent_relation', None)
+                            device.pop('parent_evidence', None)
+                        changed += 1
+                        cleared += 1
+                    continue
+                if any(device.get(field) != value
+                       for field, value in proposal.items()):
+                    if not dry_run:
+                        device.update(proposal)
+                    changed += 1
+            if changed and not dry_run:
                 self._flush()
-            return changed
+            summary.update({'changed': changed, 'cleared': cleared,
+                            'preview': bool(dry_run)})
+            return summary if details else changed
 
 store = Store()

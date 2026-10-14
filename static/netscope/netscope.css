@@ -2648,3 +2648,23 @@ html[dir="rtl"] #ns-root .ip-conflict-tag {
     margin-left: 0;
     margin-right: 5px;
 }
+
+/* Inferred logical L3 membership must not resemble a physical cable. */
+#ns-root .link.inferred.link-logical-gateway {
+    stroke-dasharray: 2 6;
+    opacity: .62;
+    stroke-width: 1.5;
+}
+
+/* Configured switch ports are cabling assertions, not measured discovery. */
+#ns-root .link.inferred.link-switch-configured {
+    stroke-dasharray: 7 3;
+    opacity: .86;
+    stroke-width: 2;
+}
+
+#ns-root .link.inferred.link-logical-gateway.hl,
+#ns-root .link.inferred.link-switch-configured.hl {
+    opacity: 1;
+    stroke: var(--primary);
+}

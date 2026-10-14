@@ -425,8 +425,10 @@ def api_link_delete():
 @ns_login_required
 def api_infer():
     cfg = load_config()
-    changed = store.infer_links(cfg)
-    return jsonify({'changed': changed})
+    data = request.get_json(silent=True) or {}
+    preview = bool(data.get('preview')) if isinstance(data, dict) else False
+    result = store.infer_links(cfg, details=True, dry_run=preview)
+    return jsonify(result)
 
 @ns_bp.route('/api/scan', methods=['POST'])
 @ns_login_required
@@ -992,8 +994,10 @@ def api_link_delete():
 @ns_login_required
 def api_infer():
     cfg = load_config()
-    changed = store.infer_links(cfg)
-    return jsonify({'changed': changed})
+    data = request.get_json(silent=True) or {}
+    preview = bool(data.get('preview')) if isinstance(data, dict) else False
+    result = store.infer_links(cfg, details=True, dry_run=preview)
+    return jsonify(result)
 
 @ns_bp.route('/api/scan', methods=['POST'])
 @ns_login_required
