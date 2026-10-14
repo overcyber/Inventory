@@ -566,6 +566,6 @@
 {% block extra_js %}
 
 <script src="{{ url_for('static', filename='js/vendor/d3.v7.min.js') }}"></script>
-<script>window.NS_T = {{ ns_i18n|tojson }};</script>
+<script>window.NS_T = {{ ns_i18n|tojson }}; window.NS_GATEWAY_ALIAS = {{ gw_aliases.get('ns', '')|tojson }};</script>
 <script src="{{ url_for('static', filename='netscope/graph.js') }}"></script>
 {% endblock %}

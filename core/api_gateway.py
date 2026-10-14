@@ -21,8 +21,14 @@ _SUB_TIMEOUT = 90
 def _secret(app):
     sec = app.config.get('GW_SECRET')
     if not sec:
-        import secrets as _secrets
-        sec = _secrets.token_hex(32)
+        # Stable across Gunicorn workers and container restarts.
+        # SECRET_KEY is mandatory in production and never exposed in HTML.
+        root = os.getenv('SECRET_KEY', '').strip()
+        if not root:
+            raise RuntimeError('SECRET_KEY obrigatório para API gateway')
+        sec = hmac.new(root.encode('utf-8'),
+                       b'inventory-gateway-v1',
+                       hashlib.sha256).hexdigest()
         app.config['GW_SECRET'] = sec
     return sec
 

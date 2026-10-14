@@ -3,7 +3,18 @@ const $ = id => document.getElementById(id);
 
 async function api(url, opts = {}) {
   try {
-    const r = await fetch(url, opts);
+    // API_LOCK=1 intentionally hides /netscope/api/*. Use a session-bound
+    // gateway alias rather than disabling the protection.
+    let requestUrl = url;
+    let requestOptions = opts;
+    if (url.startsWith('/netscope/api/') && window.NS_GATEWAY_ALIAS) {
+      requestUrl = '/gw/' + encodeURIComponent(window.NS_GATEWAY_ALIAS);
+      requestOptions = {...opts, headers: {
+        ...(opts.headers || {}),
+        'X-GW-Path': url
+      }};
+    }
+    const r = await fetch(requestUrl, requestOptions);
     const ct = r.headers.get('Content-Type') || '';
     // Try JSON parse only when the server actually sent JSON. If it sent
     // HTML (e.g. because a session expired mid-page and a 302 redirect
