@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 
-from dotenv import load_dotenv
 from flask import Flask, render_template, request, session
 from flask_apscheduler import APScheduler
 from flask_session import Session
@@ -17,7 +16,6 @@ from core.security import (
 )
 from core.i18n import inject_translations, formatar_data
 
-load_dotenv()
 
 _scheduler: APScheduler | None = None
 
@@ -86,8 +84,10 @@ def create_app() -> Flask:
 
     app.config['SQLALCHEMY_DATABASE_URI'] = cfg.get_database_url()
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    from core.migrations import upgrade_database
-    upgrade_database()
+    if (os.getenv('INVENTORY_MIGRATE_ON_APP_BOOT', 'false').strip().lower()
+            in ('1', 'true', 'yes', 'on', 'sim')):
+        from core.migrations import upgrade_database
+        upgrade_database()
     db.init_app(app)
 
     app.config['SESSION_TYPE'] = 'sqlalchemy'
@@ -128,7 +128,10 @@ def create_app() -> Flask:
         except Exception as exc:
             app.logger.warning("[AssetCore] backfill legado falhou: %s", exc)
 
-    os.makedirs(cfg.LOG_DIR, exist_ok=True)
+    try:
+        os.makedirs(cfg.LOG_DIR, exist_ok=True)
+    except OSError:
+        pass
 
     ssl_context = cfg.get_ssl_context()
 

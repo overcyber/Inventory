@@ -1,10 +1,9 @@
 :8080 {
-    encode zstd gzip
-    reverse_proxy inventory-web:8000
+    redir https://{$INVENTORY_TLS_HOST:localhost}:{$INVENTORY_TLS_PUBLIC_PORT:8443}{uri} permanent
 }
 
-:8443 {
-    tls /etc/caddy/tls/cert.pem /etc/caddy/tls/key.pem
+https://{$INVENTORY_TLS_HOST:localhost}:8443 {
+    tls internal
     encode zstd gzip
     reverse_proxy inventory-web:8000
 }

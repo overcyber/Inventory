@@ -152,6 +152,9 @@ services:
     container_name: inventory_caddy
     restart: unless-stopped
     depends_on: [inventory-web]
+    environment:
+      INVENTORY_TLS_HOST: ${INVENTORY_TLS_HOST:-localhost}
+      INVENTORY_TLS_PUBLIC_PORT: ${HTTPS_PORT:-8443}
     ports:
       - "${HTTP_PORT:-8080}:8080"
       - "${HTTPS_PORT:-8443}:8443"
@@ -168,6 +171,8 @@ services:
     restart: unless-stopped
     profiles: ["mtls"]
     depends_on: [inventory-web]
+    environment:
+      INVENTORY_TLS_HOST: ${INVENTORY_TLS_HOST:-localhost}
     ports:
       - "${MTLS_PORT:-9443}:9443"
     volumes:
