@@ -91,13 +91,17 @@ def _local_port():
 def _forward(method, real_path, body_bytes, copy_headers):
 
     port = _local_port()
-    if request.is_secure:
-        conn = http.client.HTTPSConnection(
-            '127.0.0.1', port, timeout=_SUB_TIMEOUT,
-            context=ssl._create_unverified_context())
-    else:
-        conn = http.client.HTTPConnection('127.0.0.1', port, timeout=_SUB_TIMEOUT)
-    headers = {'X-GW-Sig': _sig_for(current_app_secret(), real_path.split('?', 1)[0])}
+    # Gunicorn binds plain HTTP at 127.0.0.1:8000. The external HTTPS
+    # connection is terminated by Caddy; never attempt TLS to this port.
+    conn = http.client.HTTPConnection(
+        '127.0.0.1', port, timeout=_SUB_TIMEOUT)
+    headers = {
+        'X-GW-Sig': _sig_for(
+            current_app_secret(), real_path.split('?', 1)[0]),
+        # Preserve the browser-facing origin for Flask ProxyFix and CSRF.
+        'X-Forwarded-Proto': request.scheme,
+        'X-Forwarded-Host': request.host,
+    }
     for h, v in copy_headers:
         if v:
             headers[h] = v
