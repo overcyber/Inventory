@@ -201,11 +201,13 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
 
         new_count = 0
         found_macs = set()
-        for mac, info in all_found.items():
-            info['dns_name'] = dns_results.get(mac, '')
+        for identity, info in all_found.items():
+            info['dns_name'] = dns_results.get(identity, '')
+            # ip:... is a discovery identity, never a hardware MAC.
+            mac = '' if identity.startswith('ip:') else identity
             if store.upsert_scan_result(mac, info, flush=False):
                 new_count += 1
-            found_macs.add(mac)
+            found_macs.add(mac if mac else 'ip:' + info['ip'])
         store.mark_offline(found_macs)
     else:
         store.mark_offline(set())

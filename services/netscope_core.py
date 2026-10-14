@@ -407,6 +407,8 @@ class Store:
             for r in rows:
                 dev = dict(r.data) if isinstance(r.data, dict) else {}
                 dev.setdefault('mac', (r.mac or '').lower())
+                if str(dev.get('mac') or '').startswith('ip:'):
+                    dev['mac'] = ''
                 if not dev.get('uid'):
                     dev['uid'] = dev['mac'] or gen_uid()
                 devices.append(dev)
@@ -428,6 +430,9 @@ class Store:
             seen_uids = set()
             for dev in self._cache['devices']:
                 mac = (dev.get('mac') or '').lower()
+                if mac.startswith('ip:'):
+                    mac = ''
+                    dev['mac'] = ''
                 uid = (dev.get('uid') or mac or gen_uid()).lower()
                 dev['uid'] = uid
                 if uid in seen_uids:
@@ -590,7 +595,9 @@ class Store:
     def _new_device(self, mac, ip, vendor='', subnet='', gateway=None, source=''):
 
         now = datetime.now().isoformat()
-        mac = (mac or '').strip().lower()
+        mac, mac_err = normalize_mac(mac)
+        if mac_err:
+            mac = ''
         return {
             'uid': mac or gen_uid(),
             'mac': mac, 'ip': ip, 'hostname': '', 'dns_name': '',
@@ -618,10 +625,15 @@ class Store:
 
         with self._lock:
             self._load()
+            mac, mac_err = normalize_mac(mac)
+            if mac_err:
+                mac = ''
             existing = self.find(mac, include_deleted=True) if mac else self.find_by_ip(info.get('ip'), include_deleted=True)
             gw = info.get('gateway', '')
             now = datetime.now().isoformat()
             if existing and not existing.get('deleted'):
+                if not mac and str(existing.get('mac') or '').startswith('ip:'):
+                    existing['mac'] = ''
                 existing['ip'] = info['ip']
                 existing['vendor'] = info['vendor'] or existing.get('vendor', '')
                 existing['status'] = 'online'
