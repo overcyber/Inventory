@@ -14,6 +14,7 @@ from services.netscope_core import (store, guess_vendor, load_config,
 from services.netscope_discovery import arp_discover_subnet, read_arp_table, clamp_interval
 from services.netscope_snapshots import get_instance
 from services.network_utils import chunked, ip_in_network, iter_network_hosts, network_label
+from services.netscope_reachability import probe_many
 
 AUTO_SCAN_INTERVAL_MIN = 5
 AUTO_SCAN_INTERVAL_MAX = 360
@@ -120,6 +121,8 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
     all_found = {}
     ttl_map = {}
     errors = []
+    warnings = []
+    ping_count = 0
 
     for net in networks:
         spec = net.get('cidr') or net.get('subnet')
@@ -149,6 +152,7 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
                     except Exception:
                         pass
 
+        ping_count += len(reachable)
         time.sleep(0.2)
         arp = read_arp_table()
         try:
@@ -156,6 +160,13 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
                 spec, networks, exclude=reachable)
         except Exception:
             arp_extra, _arp_method = {}, 'erro'
+        if _arp_method in ('roteada-ou-sem-rota-arp-indisponivel',
+                           'interface-diferente-da-rota'):
+            warnings.append({
+                'network': str(spec), 'source': 'arp',
+                'reason': _arp_method,
+                'detail': 'ARP direto indisponível nesta rota; MAC remoto exige SNMP/LLDP ou agente.'
+            })
 
         for ip, mac in arp.items():
             if ip_in_network(ip, spec) and ip not in reachable:
@@ -163,16 +174,16 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
 
         for ip, mac in arp.items():
             if ip_in_network(ip, spec) and ip in reachable:
-                all_found[mac] = {
-                    'ip': ip, 'vendor': guess_vendor(mac),
+                all_found['ip:' + ip] = {
+                    'ip': ip, 'mac': mac, 'vendor': guess_vendor(mac),
                     'subnet': subnet_label, 'gateway': gw,
                     'ttl': ttl_map.get(ip), 'discovery': 'ping',
                 }
         for ip, mac in arp_extra.items():
-            if not mac or ip in reachable or mac in all_found:
+            if not mac or ip in reachable or 'ip:' + ip in all_found:
                 continue
-            all_found[mac] = {
-                'ip': ip, 'vendor': guess_vendor(mac),
+            all_found['ip:' + ip] = {
+                'ip': ip, 'mac': mac, 'vendor': guess_vendor(mac),
                 'subnet': subnet_label, 'gateway': gw,
                 'ttl': None, 'discovery': 'arp-active',
             }
@@ -183,9 +194,31 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
             if ip in represented_ips:
                 continue
             all_found['ip:' + ip] = {
-                'ip': ip, 'vendor': '', 'subnet': subnet_label, 'gateway': gw,
+                'ip': ip, 'mac': '', 'vendor': '', 'subnet': subnet_label, 'gateway': gw,
                 'ttl': ttl_map.get(ip), 'discovery': 'ping6' if ':' in ip else 'ping',
             }
+
+    # ICMP-filtered hosts may still accept TCP. Only a completed TCP
+    # handshake constitutes positive evidence of reachability.
+    represented_ips = {str(v.get('ip') or '') for v in all_found.values()}
+    known_ips = set()
+    for device in store.active():
+        ip = str(device.get('ip') or '')
+        if ip and ip not in represented_ips and any(
+                ip_in_network(ip, n.get('cidr') or n.get('subnet') or '')
+                for n in networks):
+            known_ips.add(ip)
+    tcp_found = probe_many(known_ips)
+    for ip, port in tcp_found.items():
+        spec = next((n.get('cidr') or n.get('subnet')
+                     for n in networks
+                     if ip_in_network(ip, n.get('cidr') or n.get('subnet') or '')), '')
+        all_found['ip:' + ip] = {
+            'ip': ip, 'mac': '', 'vendor': '',
+            'subnet': network_label(spec),
+            'gateway': '', 'ttl': None,
+            'discovery': 'tcp-connect', 'reachable_tcp_port': port,
+        }
 
     if all_found:
         dns_results = {}
@@ -203,11 +236,13 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
         found_macs = set()
         for identity, info in all_found.items():
             info['dns_name'] = dns_results.get(identity, '')
-            # ip:... is a discovery identity, never a hardware MAC.
-            mac = '' if identity.startswith('ip:') else identity
+            # Identity is IP-derived; the hardware MAC must come from ARP.
+            mac = info.get('mac') or ''
             if store.upsert_scan_result(mac, info, flush=False):
                 new_count += 1
-            found_macs.add(mac if mac else 'ip:' + info['ip'])
+            found_macs.add('ip:' + info['ip'])
+            if mac:
+                found_macs.add(mac)
         store.mark_offline(found_macs)
     else:
         # Failed/empty scan does not prove the whole network is down.
@@ -247,6 +282,8 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
         _scan_state['result'] = {
             'scanned': len(networks), 'new': new_count,
             'total': len(all_found), 'errors': errors,
+            'warnings': warnings, 'ping_found': ping_count,
+            'tcp_found': len(tcp_found), 'tcp_probed': len(known_ips),
             'arp_found': sum(1 for i in all_found.values()
                              if i.get('discovery') == 'arp-active'),
             'wazuh_synced': wazuh_stats is not None,
@@ -254,38 +291,32 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
         }
         _scan_state['running'] = False
 
-def scan_status():
+def local_scan_result():
+    """Read the result of a scan executed inside the host-network worker."""
     with _scan_state['lock']:
-        if _scan_state['running']:
-            return {'status': 'scanning'}
-        elif _scan_state['result']:
-            r = _scan_state['result'].copy()
-            _scan_state['result'] = None
-            return r
-        return {'status': 'idle'}
+        return dict(_scan_state['result'] or {})
+
+
+def scan_status():
+    from services.netscope_scan_control import scan_state
+    try:
+        return scan_state()
+    except Exception as exc:
+        return {'status': 'error', 'error': 'Fila de descoberta indisponível: ' + str(exc)}
+
 
 def start_scan(auto_snapshot=False):
-
-    from flask import current_app
+    """Queue manual discovery on the host-network worker."""
+    from services.netscope_scan_control import submit_scan
+    cfg = load_config()
+    networks = cfg.get('networks', [])
+    if not networks:
+        return False, {'error': 'Nenhuma rede configurada'}, 400
     try:
-        app = current_app._get_current_object()
-    except RuntimeError:
-        app = _app_ref
-    with _scan_state['lock']:
-        if _scan_state['running']:
-            return False, {'error': 'Scan já em andamento',
-                           'reason': 'already_running'}, 409
-        cfg = load_config()
-        networks = cfg.get('networks', [])
-        if not networks:
-            return False, {'error': 'Nenhuma rede configurada'}, 400
-        _scan_state['running'] = True
-        _scan_state['result'] = None
-    scan_cfg = cfg.get('scan', {})
-    t = threading.Thread(target=run_scan, args=(app, networks, scan_cfg),
-                         kwargs={'auto_snapshot': auto_snapshot}, daemon=True)
-    t.start()
-    return True, {'status': 'scanning', 'subnets': len(networks)}, 200
+        return submit_scan(subnet_count=len(networks),
+                           auto_snapshot=auto_snapshot)
+    except Exception as exc:
+        return False, {'error': 'Fila de descoberta indisponível: ' + str(exc)}, 503
 
 def _auto_scan_loop(app):
 

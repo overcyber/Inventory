@@ -683,6 +683,8 @@ class Store:
                     existing['type'] = 'router'
                 if flush:
                     self._flush()
+                else:
+                    self._cache_loaded_at = time.monotonic()
                 return False
             else:
                 if existing and existing.get('deleted') and existing.get('merged_into'):
@@ -716,6 +718,8 @@ class Store:
                                 d['type'] = 'router'
                             if flush:
                                 self._flush()
+                            else:
+                                self._cache_loaded_at = time.monotonic()
                             return False
 
                 dev = self._new_device(mac, info['ip'], info['vendor'],
@@ -728,6 +732,8 @@ class Store:
                 self._cache['devices'].append(dev)
                 if flush:
                     self._flush()
+                else:
+                    self._cache_loaded_at = time.monotonic()
                 return True
 
     def apply_dns_refresh(self, results):

@@ -2098,6 +2098,15 @@ function pollScanStatus() {
     clearInterval(_scanPoll); _scanPoll = null; S.scanning = false;
     setBtnLoading($('btn-scan'), false);
 
+    if (r.status === 'error') {
+      toast(t('Scan falhou: {e}', {e: r.error || 'erro no coletor'}), 'err');
+      return;
+    }
+    const tcpN = r.tcp_found || 0;
+    if (tcpN) toast(t('{n} hosts confirmados por TCP (ICMP filtrado)', {n: tcpN}), 'ok');
+    if (r.warnings && r.warnings.length) {
+      toast(t('ARP indisponível em algumas redes roteadas; use SNMP/LLDP para obter MACs'), 'warn');
+    }
     const arpN = r.arp_found || 0;
     if (r.new > 0) {
       toast(t('Scan: {total} dispositivos, {n} novos', {total: r.total, n: r.new}) +

@@ -265,34 +265,30 @@ def run_full_sync(app_ref, seq=0):
         sync_wazuh_and_netscope(app_ref)
         with app_ref.app_context():
             try:
-                from services.netscope_core import load_config
-                from services.netscope_engine import run_scan, _scan_state
-                cfg = load_config()
-                networks = cfg.get('networks') or []
-                if networks:
-                    with _scan_state['lock']:
-                        busy = _scan_state['running']
-                        if not busy:
-                            _scan_state['running'] = True
-                            _scan_state['result'] = None
-                    if busy:
-                        app_ref.logger.info(
-                            "[Sincronizar Agora] Ping sweep pulado — já existe "
-                            "uma varredura em andamento.")
+                # Scan must run on inventory-discovery (host networking), not
+                # in the web container's bridge namespace.
+                from services.netscope_engine import start_scan, scan_status
+                import time
+                ok, payload, status_code = start_scan(auto_snapshot=False)
+                if not ok and payload.get('reason') != 'already_running':
+                    app_ref.logger.warning(
+                        '[Sincronizar Agora] descoberta não iniciada: %s', payload)
+                else:
+                    # Wait inside this background sync thread until the host
+                    # worker finishes so the UI doesn't show false completion.
+                    for _ in range(300):
+                        scan = scan_status()
+                        if scan.get('status') != 'scanning':
+                            app_ref.logger.info(
+                                '[Sincronizar Agora] descoberta: %s', scan)
+                            break
+                        time.sleep(2)
                     else:
-                        try:
-                            run_scan(app_ref, networks, cfg.get('scan', {}),
-                                     auto_snapshot=False)
-                        finally:
-                            with _scan_state['lock']:
-                                _scan_state['running'] = False
+                        app_ref.logger.warning(
+                            '[Sincronizar Agora] timeout aguardando descoberta')
             except Exception as e:
-                app_ref.logger.error(f"[Sincronizar Agora] Ping sweep falhou: {e}")
-            try:
-                from services.netscope_discovery import run_manual_pass
-                run_manual_pass(app_ref)
-            except Exception as e:
-                app_ref.logger.error(f"[Sincronizar Agora] ARP Discovery falhou: {e}")
+                app_ref.logger.exception(
+                    '[Sincronizar Agora] descoberta falhou: %s', e)
     finally:
         with FULL_SYNC_STATE['lock']:
             FULL_SYNC_STATE['running'] = False

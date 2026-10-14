@@ -345,17 +345,22 @@ def api_device_ping(mac):
         avg_rtt = round(float(rm.group(1)), 1) if rm else None
         ttl_m = re.search(r'ttl=(\d+)', r.stdout, re.IGNORECASE)
         ttl = int(ttl_m.group(1)) if ttl_m else None
-        dev['status'] = 'online' if r.returncode == 0 else 'unverified'
-        if r.returncode == 0:
+        from services.netscope_reachability import probe_tcp
+        tcp_port = None if r.returncode == 0 else probe_tcp(dev['ip'])
+        reachable = r.returncode == 0 or tcp_port is not None
+        dev['status'] = 'online' if reachable else 'unverified'
+        if reachable:
             dev['last_seen'] = datetime.now().isoformat()
             dev['missed_scans'] = 0
+            if tcp_port is not None:
+                dev['discovery'] = 'tcp-connect'
         if avg_rtt is not None:
             dev['avg_rtt'] = avg_rtt
         if ttl is not None:
             dev['ttl'] = ttl
         with store._lock:
             store._flush()
-        return jsonify({'reachable': r.returncode == 0, 'avg_rtt': avg_rtt, 'ttl': ttl})
+        return jsonify({'reachable': reachable, 'avg_rtt': avg_rtt, 'ttl': ttl, 'tcp_port': tcp_port})
     except subprocess.TimeoutExpired:
         return jsonify({'reachable': False, 'avg_rtt': None, 'ttl': None})
 
@@ -907,17 +912,22 @@ def api_device_ping(mac):
         avg_rtt = round(float(rm.group(1)), 1) if rm else None
         ttl_m = re.search(r'ttl=(\d+)', r.stdout, re.IGNORECASE)
         ttl = int(ttl_m.group(1)) if ttl_m else None
-        dev['status'] = 'online' if r.returncode == 0 else 'unverified'
-        if r.returncode == 0:
+        from services.netscope_reachability import probe_tcp
+        tcp_port = None if r.returncode == 0 else probe_tcp(dev['ip'])
+        reachable = r.returncode == 0 or tcp_port is not None
+        dev['status'] = 'online' if reachable else 'unverified'
+        if reachable:
             dev['last_seen'] = datetime.now().isoformat()
             dev['missed_scans'] = 0
+            if tcp_port is not None:
+                dev['discovery'] = 'tcp-connect'
         if avg_rtt is not None:
             dev['avg_rtt'] = avg_rtt
         if ttl is not None:
             dev['ttl'] = ttl
         with store._lock:
             store._flush()
-        return jsonify({'reachable': r.returncode == 0, 'avg_rtt': avg_rtt, 'ttl': ttl})
+        return jsonify({'reachable': reachable, 'avg_rtt': avg_rtt, 'ttl': ttl, 'tcp_port': tcp_port})
     except subprocess.TimeoutExpired:
         return jsonify({'reachable': False, 'avg_rtt': None, 'ttl': None})
 

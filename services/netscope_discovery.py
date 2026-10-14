@@ -2,6 +2,8 @@
 import socket
 import struct
 import threading
+import json
+import subprocess
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -108,9 +110,11 @@ def parse_arp_reply(frame):
     except (struct.error, OSError, ValueError):
         return None
 
-def raw_arp_sweep(iface, ips, timeout=1.5):
+def raw_arp_sweep(iface, ips, timeout=1.5, source_ip=None):
 
     src_ip, src_mac = get_iface_info(iface)
+    if source_ip:
+        src_ip = source_ip
     if not src_mac or len(src_mac) != 17:
         raise OSError(f'Interface {iface} sem MAC utilizável')
     if not src_ip:
@@ -171,6 +175,30 @@ def udp_arp_trigger(ips, settle=2.0):
     if settle > 0:
         time.sleep(settle)
 
+def routed_direct_interface(network):
+    """Select the interface for a directly connected target network.
+
+    Do not ARP across routed links: the resulting MAC is the next hop.
+    """
+    try:
+        target = str(next(network.hosts()))
+        result = subprocess.run(
+            ['ip', '-j', '-4', 'route', 'get', target],
+            capture_output=True, text=True, timeout=3)
+        if result.returncode:
+            return None, None
+        routes = json.loads(result.stdout or '[]')
+        if not routes or routes[0].get('gateway') or routes[0].get('via'):
+            return None, None
+        interface = str(routes[0].get('dev') or '')
+        source = str(routes[0].get('prefsrc') or routes[0].get('src') or '')
+        if interface and source and ip_in_network(source, str(network)):
+            return interface, source
+    except (OSError, ValueError, StopIteration, TypeError):
+        pass
+    return None, None
+
+
 def arp_discover_subnet(subnet, networks=None, exclude=(),
                         timeout=1.5, settle=2.0):
     """Active ARP discovery for IPv4 CIDR/legacy prefixes, chunked to bound memory."""
@@ -182,17 +210,15 @@ def arp_discover_subnet(subnet, networks=None, exclude=(),
         return {}, 'ipv6-sem-arp'
     excl = set(exclude or ())
     max_hosts = max(1, int(os.getenv('NETSCOPE_MAX_HOSTS_PER_NETWORK', '65536')))
-    iface = None
+    iface, iface_ip = routed_direct_interface(network)
+    if not iface:
+        return {}, 'roteada-ou-sem-rota-arp-indisponivel'
     for net in networks or []:
         if str(net.get('cidr') or net.get('subnet') or '') == str(subnet):
-            iface = (net.get('interface') or '').strip() or None
+            selected = (net.get('interface') or '').strip()
+            if selected and selected != iface:
+                return {}, 'interface-diferente-da-rota'
             break
-    iface = iface or get_default_iface()
-    if not iface:
-        return {}, 'indisponivel'
-    iface_ip, _ = get_iface_info(iface)
-    if not iface_ip or not ip_in_network(iface_ip, str(network)):
-        return {}, 'indisponivel'
 
     found = {}
     method = 'arp-raw'
@@ -202,7 +228,8 @@ def arp_discover_subnet(subnet, networks=None, exclude=(),
         if not batch:
             continue
         try:
-            found.update(raw_arp_sweep(iface, batch, timeout=timeout))
+            found.update(raw_arp_sweep(iface, batch, timeout=timeout,
+                                       source_ip=iface_ip))
             continue
         except (PermissionError, OSError):
             method = 'arp-udp'
@@ -265,7 +292,7 @@ def _dns_refresh_known(app, force=False):
             return 0
         _monitor_state['last_dns_refresh'] = now
     try:
-        devices = [d for d in (store._cache['devices'] or [])
+        devices = [d for d in store.active()
                    if not d.get('deleted') and d.get('ip') and d.get('mac')]
     except Exception:
         return 0
@@ -320,8 +347,7 @@ def _monitor_pass_body(app, networks):
             method = m
         seen += len(found)
         for ip, mac in found.items():
-            if store.find(mac, include_deleted=True):
-                continue
+            # Existing devices must also be refreshed by a positive ARP reply.
             try:
                 subnet_label = str(parse_network_spec(subnet))
             except Exception:
