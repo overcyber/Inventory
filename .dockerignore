@@ -1,0 +1,14 @@
+.env
+.env.hashes
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+data/
+logs/
+dist/
+build/
+*.egg-info/

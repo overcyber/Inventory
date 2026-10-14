@@ -7,9 +7,11 @@ import socket
 import struct
 import fcntl
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
-load_dotenv()
+_dotenv_path = find_dotenv(usecwd=True)
+if _dotenv_path and os.access(_dotenv_path, os.R_OK):
+    load_dotenv(dotenv_path=_dotenv_path, override=False)
 
 APP_VERSION = '0.20.0'
 
