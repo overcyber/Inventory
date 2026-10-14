@@ -141,17 +141,40 @@ def settings():
 
 @admin_required
 def update_sync():
-    data = request.get_json()
+    """Backward-compatible Wazuh interval endpoint.
+
+    The Docker deployment uses the external mult-source scheduler, so this
+    endpoint persists the Wazuh schedule in the same source_schedules record.
+    If the legacy in-process scheduler is active, it is also rescheduled.
+    """
+    data = request.get_json(silent=True) or {}
     seconds = data.get('seconds')
     if seconds is None:
         return jsonify(success=False, error="Intervalo inválido"), 400
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        return jsonify(success=False, error="Intervalo inválido"), 400
 
-    # v0.18.12 — persistência + reagendamento centralizados no bootstrap
-    # (o painel de Sincronização usa o MESMO SystemSetting/job).
-    from core.bootstrap import reschedule_wazuh_sync
-    reschedule_wazuh_sync(int(seconds), _scheduled_sync())
+    from services.source_scheduler import save_source_schedules
+    saved = save_source_schedules({
+        'wazuh': {'interval_seconds': seconds}
+    })
 
-    return jsonify(success=True)
+    try:
+        from core.app import get_scheduler
+        scheduler = get_scheduler()
+        if scheduler is not None and getattr(scheduler, 'running', False):
+            from core.bootstrap import reschedule_wazuh_sync
+            reschedule_wazuh_sync(
+                saved['wazuh']['interval_seconds'], _scheduled_sync())
+    except Exception:
+        _app().logger.debug(
+            '[Scheduler] APScheduler interno inativo; worker externo usará a nova agenda.')
+
+    return jsonify(
+        success=True,
+        seconds=saved['wazuh']['interval_seconds'])
 
 
 @admin_required
