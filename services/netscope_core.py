@@ -1,6 +1,7 @@
 
 import json
 import threading
+import time
 from datetime import datetime
 
 def _plausible_hostname(name, ip=''):
@@ -393,10 +394,11 @@ class Store:
 
     def __init__(self):
         self._cache = None
+        self._cache_loaded_at = 0.0
         self._lock = threading.RLock()
 
     def _load(self):
-        if self._cache is not None:
+        if self._cache is not None and time.monotonic() - self._cache_loaded_at < 2.0:
             return self._cache
         try:
             from models import NetscopeDevice
@@ -409,8 +411,10 @@ class Store:
                     dev['uid'] = dev['mac'] or gen_uid()
                 devices.append(dev)
             self._cache = {'devices': devices}
+            self._cache_loaded_at = time.monotonic()
         except Exception:
-            self._cache = {'devices': []}
+            if self._cache is None:
+                raise
         return self._cache
 
     def _flush(self):
@@ -456,18 +460,7 @@ class Store:
                     row.last_seen = _parse_dt(dev.get('last_seen'))
                     row.data = doc
 
-            alive_uids = {(d.get('uid') or '').lower() for d in self._cache['devices']}
-            alive_macs = {(d.get('mac') or '').lower() for d in self._cache['devices']}
-            for r in all_rows:
-                r_uid = ''
-                if r.data and isinstance(r.data, dict):
-                    r_uid = str(r.data.get('uid', '')).lower()
-                r_mac = (r.mac or '').lower()
-                if r_mac and r_mac in alive_macs:
-                    continue
-                if r_uid and r_uid in alive_uids:
-                    continue
-                db.session.delete(r)
+            # Preserve rows created by other containers; only explicit soft deletes may remove devices.
             db.session.commit()
         except Exception:
             try:
