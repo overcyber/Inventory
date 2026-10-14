@@ -584,7 +584,10 @@ class Store:
         with_agent = sum(1 for d in act if d.get('has_agent'))
         agent_exempt = sum(1 for d in act
                            if not d.get('has_agent') and d.get('agent_exempt'))
-        return {'total': len(act), 'online': online, 'offline': len(act) - online,
+        offline = sum(1 for d in act if d.get('status') == 'offline')
+        unverified = len(act) - online - offline
+        return {'total': len(act), 'online': online, 'offline': offline,
+                'unverified': unverified,
                 'types': types, 'new_today': new_today,
                 'documented': documented,
                 'undocumented': len(act) - documented,

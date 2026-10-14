@@ -508,6 +508,7 @@ async function loadStats() {
   S.stats = r;
   $('stat-online').textContent = r.online;
   $('stat-offline').textContent = r.offline;
+  $('stat-offline').title = (r.unverified || 0) + ' dispositivos não verificados (não classificados como offline)';
   $('stat-new').textContent = r.new_today;
 
   const dupEl = $('stat-duplicates');
