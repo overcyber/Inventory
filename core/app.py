@@ -238,13 +238,14 @@ def create_app() -> Flask:
 def sync_wazuh_and_netscope(app_ref):
 
     with app_ref.app_context():
-        from utils.collector import sync_wazuh_data
+        from services.inventory_sources import sync_configured_sources
         from services.netscope_wazuh_bridge import sync_from_inventory as netscope_sync
-        sync_wazuh_data(app_ref)
+        result = sync_configured_sources(app_ref)
         try:
             netscope_sync(app_ref)
         except Exception as e:
             app_ref.logger.error(f"[NetScope] Ponte Wazuh falhou após sync manual: {e}")
+        return result
 
 FULL_SYNC_STATE = {
     'running': False, 'seq': 0, 'done_seq': 0,

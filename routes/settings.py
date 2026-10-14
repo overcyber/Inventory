@@ -29,6 +29,7 @@ ROUTES = [
     ('/settings', 'settings', 'settings', {}),
     ('/settings/update_sync', 'update_sync', 'update_sync', {'methods': ['POST']}),
     ('/settings/update_discovery', 'update_discovery', 'update_discovery', {'methods': ['POST']}),
+    ('/settings/update_sources', 'update_sources', 'update_sources', {'methods': ['POST']}),
     ('/settings/update_assistant', 'update_assistant', 'update_assistant', {'methods': ['POST']}),
     ('/settings/test_assistant', 'test_assistant', 'test_assistant', {'methods': ['POST']}),
     # v0.18.23 — lista de modelos REAIS da conta (datalist do painel)
@@ -91,6 +92,16 @@ def settings():
     except Exception:
         pass
 
+    try:
+        from services.source_scheduler import (
+            SOURCE_CATALOG, get_source_schedules,
+        )
+        source_catalog = SOURCE_CATALOG
+        source_schedules = get_source_schedules(persist=True)
+    except Exception:
+        source_catalog = ()
+        source_schedules = {}
+
     # v0.18.19/20 — Assistente IA: status da configuração (a CHAVE nunca
     # volta ao browser — apenas se existe, o modelo e a FONTE: .env ou painel).
     assistant_cfg = {'configured': False, 'model': '', 'source': ''}
@@ -122,6 +133,8 @@ def settings():
 
     return render_template('settings.html', machines=machines, users=users,
                            discovery=discovery, sync_seconds=sync_seconds,
+                           source_catalog=source_catalog,
+                           source_schedules=source_schedules,
                            assistant_cfg=assistant_cfg,
                            auto_merge=auto_merge, notif_prefs=notif_prefs)
 
@@ -139,6 +152,28 @@ def update_sync():
     reschedule_wazuh_sync(int(seconds), _scheduled_sync())
 
     return jsonify(success=True)
+
+
+@admin_required
+def update_sources():
+    """Persist activation and independent polling intervals for pull sources."""
+    data = request.get_json(silent=True) or {}
+    sources = data.get('sources')
+    if not isinstance(sources, dict):
+        return jsonify(success=False, error='sources inválido'), 400
+    try:
+        from services.source_scheduler import save_source_schedules
+        saved = save_source_schedules(sources)
+        _app().logger.info(
+            '[Scheduler] configuração multifuente salva pelo painel: %s',
+            saved)
+        return jsonify(success=True, sources=saved)
+    except (TypeError, ValueError) as exc:
+        return jsonify(success=False, error=str(exc)), 400
+    except Exception as exc:
+        _app().logger.exception(
+            '[Scheduler] falha ao salvar configuração multifuente')
+        return jsonify(success=False, error=str(exc)), 500
 
 
 @admin_required

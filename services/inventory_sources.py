@@ -30,7 +30,7 @@ class WazuhSource(InventorySource):
         return env_bool('WAZUH_ENABLED',bool(host and host.upper() not in {'IP_WAZUH','CHANGEME'}))
     def collect(self,app):
         from utils.collector import _sync_wazuh_only
-        r=_sync_wazuh_only(app) or {}
+        r=_sync_wazuh_only(app, force=True) or {}
         return SourceResult(self.name,int(r.get('processed',0)),int(r.get('errors',0)),detail=r)
 
 class NetScopeSource(InventorySource):
@@ -422,17 +422,38 @@ class WazuhIndexerSource(InventorySource):
         return SourceResult(self.name,len(grouped),0,detail={'hits':len(all_hits),'pages':pages})
 
 SOURCES=[WazuhSource,NetScopeSource,OsquerySource,SNMPSource,SSHSource,WinRMSource,WazuhIndexerSource]
-def sync_configured_sources(app):
+
+def sync_configured_sources(app, only=None, enabled_overrides=None):
     summary={}
-    for cls in SOURCES:
-        src=cls(); enabled=False
+    selected=set(only or [])
+    overrides=enabled_overrides
+    if overrides is None:
         try:
-            enabled=src.enabled()
-            if not enabled: record_source_state(src.name,enabled=False,status='disabled',success=False); summary[src.name]={'skipped':True}; continue
-            result=src.collect(app); payload={'observed':result.observed,'errors':result.errors,'skipped':result.skipped,'detail':result.detail or {}}
-            summary[src.name]=payload; record_source_state(src.name,enabled=True,status='ok' if not result.errors else 'partial',metadata=payload,success=True)
+            from services.source_scheduler import enabled_overrides as _schedule_enabled
+            overrides=_schedule_enabled()
+        except Exception:
+            overrides={}
+
+    for cls in SOURCES:
+        src=cls()
+        if selected and src.name not in selected:
+            continue
+        enabled=False
+        try:
+            enabled=bool(overrides[src.name]) if src.name in overrides else src.enabled()
+            if not enabled:
+                record_source_state(src.name,enabled=False,status='disabled',success=False)
+                summary[src.name]={'skipped':True}
+                continue
+            result=src.collect(app)
+            payload={'observed':result.observed,'errors':result.errors,'skipped':result.skipped,'detail':result.detail or {}}
+            summary[src.name]=payload
+            record_source_state(src.name,enabled=True,status='ok' if not result.errors else 'partial',metadata=payload,success=True)
         except Exception as exc:
-            try: record_source_state(src.name,enabled=enabled,status='error',error=str(exc),success=False)
-            except Exception: pass
-            app.logger.exception('[Source:%s] %s',src.name,exc); summary[src.name]={'error':str(exc)}
+            try:
+                record_source_state(src.name,enabled=enabled,status='error',error=str(exc),success=False)
+            except Exception:
+                pass
+            app.logger.exception('[Source:%s] %s',src.name,exc)
+            summary[src.name]={'error':str(exc)}
     return summary

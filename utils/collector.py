@@ -174,13 +174,13 @@ class WazuhCollector:
                 break
         return agents
 
-def _sync_wazuh_only(app):
+def _sync_wazuh_only(app, force=False):
 
     with app.app_context():
         logger = app.logger
         host = (os.getenv('WAZUH_HOST') or '').strip()
         default_enabled = bool(host and host.upper() not in {'IP_WAZUH', 'CHANGEME'})
-        if not _env_bool('WAZUH_ENABLED', default_enabled):
+        if not force and not _env_bool('WAZUH_ENABLED', default_enabled):
             logger.info("[Coletor] Wazuh desabilitado; ciclo pulado.")
             return {'processed': 0, 'errors': 0, 'skipped': True}
         if not host or host.upper() in {'IP_WAZUH', 'CHANGEME'}:

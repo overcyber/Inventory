@@ -53,12 +53,12 @@
     <div class="settings-card">
         <div class="settings-card-header">
             <i class="fas fa-sync-alt"></i>
-            <h3>{{ translate('SYNC com Wazuh') }}</h3>
+            <h3>{{ translate('Coleta e Descoberta Multifuente') }}</h3>
         </div>
         <div class="settings-card-body">
-            <p>{{ translate('Configure a frequência com que o sistema coleta dados do Wazuh API.') }}</p>
+            <p>{{ translate('Configure cada fonte de inventário e descoberta de forma independente.') }}</p>
             <button class="btn btn-primary" id="sync-settings-btn">
-                <i class="fas fa-sliders-h"></i> {{ translate('Configurar Sync') }}
+                <i class="fas fa-sliders-h"></i> {{ translate('Configurar Coletas') }}
             </button>
         </div>
     </div>
@@ -410,15 +410,28 @@
 
             <div class="sync-slider-container">
 
-                <div class="sync-row">
+                {% for src in source_catalog %}
+                {% set sc = source_schedules.get(src.name, {'enabled': false, 'interval_seconds': 3600}) %}
+                <div class="sync-row" data-source-row="{{ src.name }}">
                     <div class="sync-row-head">
-                        <i class="fas fa-shield-halved"></i>
-                        <span class="sync-name">Wazuh</span>
-                        <span class="sync-val" id="sync-label-display">1 h</span>
+                        <i class="fas {{ src.icon }}"></i>
+                        <span class="sync-name">{{ src.label }}</span>
+                        <label class="sync-switch" title="{{ src.hint }}">
+                            <input type="checkbox" id="sw-src-{{ src.name }}" {% if sc.enabled %}checked{% endif %}>
+                            <span class="sync-switch-track"></span>
+                        </label>
+                        <span class="sync-val" id="val-src-{{ src.name }}">1 h</span>
                     </div>
-                    <input type="range" id="sync-range" class="sync-range" min="300" max="86400" step="300"
-                        value="{{ sync_seconds }}">
+                    <input type="range" id="rng-src-{{ src.name }}" class="sync-range"
+                        min="5" max="1440" step="5"
+                        value="{{ (sc.interval_seconds / 60)|int }}"
+                        {% if not sc.enabled %}disabled{% endif %}>
+                    <div class="sync-hint" style="margin-top:6px;">
+                        <i class="fas fa-circle-info"></i>
+                        <span>{{ src.hint }}</span>
+                    </div>
                 </div>
+                {% endfor %}
 
                 <div class="sync-row">
                     <div class="sync-row-head">
@@ -472,7 +485,7 @@
 
             <div style="display: flex; gap: 1rem; margin-top: 2rem;">
                 <button id="btn-sync-now" class="btn btn-outline" style="flex: 1;"
-                        title="{{ translate('Executa: sync Wazuh + Ping Sweep + ARP Discovery') }}">
+                        title="{{ translate('Executa todas as fontes habilitadas + Ping Sweep + ARP Discovery') }}">
                     <i class="fas fa-play"></i> {{ translate('Sincronizar Agora') }}
                 </button>
                 <button id="btn-save-sync" class="btn btn-primary" style="flex: 1;">
@@ -482,7 +495,7 @@
 
             <div class="sync-hint" style="margin-top: .75rem;">
                 <i class="fas fa-circle-info"></i>
-                <span>{{ translate('O Sincronizar Agora executa as 3 ações: sync Wazuh, Ping Sweep e ARP Discovery.') }}</span>
+                <span>{{ translate('O Sincronizar Agora executa todas as fontes habilitadas e, em seguida, Ping Sweep e ARP Discovery.') }}</span>
             </div>
         </div>
     </div>
@@ -1043,8 +1056,7 @@
             rng.style.setProperty('--fill', pct);
         }
 
-        const syncRange = document.getElementById('sync-range');
-        const syncLabelDisplay = document.getElementById('sync-label-display');
+        const sourceRows = Array.from(document.querySelectorAll('[data-source-row]'));
         const rngPing = document.getElementById('rng-pingsweep');
         const valPing = document.getElementById('val-pingsweep');
         const swPing = document.getElementById('sw-pingsweep');
@@ -1052,10 +1064,17 @@
         const valArp = document.getElementById('val-arp');
         const swArp = document.getElementById('sw-arp');
 
-        if (syncRange && syncLabelDisplay) {
-            syncLabelDisplay.textContent = syncFmtSecs(syncRange.value);
-            syncPaintRange(syncRange);
-        }
+        sourceRows.forEach(row => {
+            const name = row.dataset.sourceRow;
+            const rng = document.getElementById('rng-src-' + name);
+            const val = document.getElementById('val-src-' + name);
+            const sw = document.getElementById('sw-src-' + name);
+            if (rng && val) {
+                val.textContent = syncFmtMins(rng.value);
+                syncPaintRange(rng);
+            }
+            if (sw && rng) rng.disabled = !sw.checked;
+        });
         if (rngPing && valPing) { valPing.textContent = syncFmtMins(rngPing.value); syncPaintRange(rngPing); }
         if (rngArp && valArp) { valArp.textContent = syncFmtMins(rngArp.value); syncPaintRange(rngArp); }
 
@@ -1065,12 +1084,21 @@
         syncBindSwitch(swPing, rngPing);
         syncBindSwitch(swArp, rngArp);
 
-        if (syncRange && syncLabelDisplay) {
-            syncRange.addEventListener('input', () => {
-                syncLabelDisplay.textContent = syncFmtSecs(syncRange.value);
-                syncPaintRange(syncRange);
-            });
-        }
+        sourceRows.forEach(row => {
+            const name = row.dataset.sourceRow;
+            const rng = document.getElementById('rng-src-' + name);
+            const val = document.getElementById('val-src-' + name);
+            const sw = document.getElementById('sw-src-' + name);
+            if (rng && val) {
+                rng.addEventListener('input', () => {
+                    val.textContent = syncFmtMins(rng.value);
+                    syncPaintRange(rng);
+                });
+            }
+            if (sw && rng) {
+                sw.addEventListener('change', () => syncBindSwitch(sw, rng));
+            }
+        });
         if (rngPing && valPing) {
             rngPing.addEventListener('input', () => {
                 valPing.textContent = syncFmtMins(rngPing.value);
@@ -1095,10 +1123,21 @@
 
             try {
 
-                const r1 = await fetch('/settings/update_sync', {
+                const sources = {};
+                sourceRows.forEach(row => {
+                    const name = row.dataset.sourceRow;
+                    const rng = document.getElementById('rng-src-' + name);
+                    const sw = document.getElementById('sw-src-' + name);
+                    sources[name] = {
+                        enabled: !!(sw && sw.checked),
+                        interval_seconds: (parseInt(rng ? rng.value : '60', 10) || 60) * 60
+                    };
+                });
+
+                const r1 = await fetch('/settings/update_sources', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ seconds: parseInt(syncRange.value, 10) })
+                    body: JSON.stringify({ sources })
                 }).then(r => r.json());
 
                 const r2 = await fetch('/settings/update_discovery', {
@@ -1140,7 +1179,7 @@
                 .then(data => {
                     if (data.success) {
 
-                        showToast('{{ translate("Sincronização, Ping Sweep e ARP iniciados com sucesso!") }}', 'success');
+                        showToast('{{ translate("Coleta multifuente, Ping Sweep e ARP iniciados com sucesso!") }}', 'success');
                         (window.closeModalFade || ((m) => m.classList.remove('active')))(modals.sync);
 
                         const ourSeq = data.seq || 0;
