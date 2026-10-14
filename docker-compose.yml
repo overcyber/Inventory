@@ -34,7 +34,9 @@ services:
     networks: [inventory]
 
   inventory-web:
-    build: .
+    build:
+      context: .
+      network: host
     container_name: inventory_web
     restart: unless-stopped
     env_file: .env
@@ -63,7 +65,9 @@ services:
     networks: [inventory]
 
   inventory-worker:
-    build: .
+    build:
+      context: .
+      network: host
     container_name: inventory_worker
     restart: unless-stopped
     env_file: .env
@@ -87,7 +91,9 @@ services:
     networks: [inventory]
 
   inventory-scheduler:
-    build: .
+    build:
+      context: .
+      network: host
     container_name: inventory_scheduler
     restart: unless-stopped
     env_file: .env
@@ -111,7 +117,9 @@ services:
     networks: [inventory]
 
   inventory-discovery:
-    build: .
+    build:
+      context: .
+      network: host
     container_name: inventory_discovery
     restart: unless-stopped
     network_mode: host
