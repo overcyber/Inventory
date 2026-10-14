@@ -628,12 +628,28 @@ class Store:
             mac, mac_err = normalize_mac(mac)
             if mac_err:
                 mac = ''
-            existing = self.find(mac, include_deleted=True) if mac else self.find_by_ip(info.get('ip'), include_deleted=True)
+            # Prefer a verified MAC identity. A ping-only observation must
+            # attach to the strongest row for that IP instead of creating
+            # a second MAC-less identity.
+            by_ip = [d for d in self._load()['devices']
+                     if not d.get('deleted') and d.get('ip') == info.get('ip')]
+            by_ip.sort(key=lambda d: bool(d.get('mac')), reverse=True)
+            existing = (
+                self.find(mac, include_deleted=True) if mac else None
+            )
+            if not existing:
+                existing = next(
+                    (d for d in by_ip
+                     if not mac or not d.get('mac') or d.get('mac') == mac),
+                    None,
+                )
             gw = info.get('gateway', '')
             now = datetime.now().isoformat()
             if existing and not existing.get('deleted'):
                 if not mac and str(existing.get('mac') or '').startswith('ip:'):
                     existing['mac'] = ''
+                if mac and not existing.get('mac'):
+                    existing['mac'] = mac
                 existing['ip'] = info['ip']
                 existing['vendor'] = info['vendor'] or existing.get('vendor', '')
                 existing['status'] = 'online'
