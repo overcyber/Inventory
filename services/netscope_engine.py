@@ -210,7 +210,7 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
             found_macs.add(mac if mac else 'ip:' + info['ip'])
         store.mark_offline(found_macs)
     else:
-        store.mark_offline(set())
+        # Failed/empty scan does not prove the whole network is down.
         new_count = 0
 
     wazuh_stats = _auto_wazuh_sync()

@@ -785,7 +785,9 @@ class Store:
                 else:
                     misses = int(d.get('missed_scans') or 0) + 1
                     d['missed_scans'] = min(misses, threshold)
-                    if misses >= threshold:
+                    # A failed ICMP/ARP check cannot establish host outage.
+                    # Old 'offline' records must not remain stuck forever.
+                    if d.get('status') != 'unverified':
                         d['status'] = 'unverified'
             self._flush()
 
