@@ -163,8 +163,19 @@ generate_server_cert() {
     extfile="$tmpdir/server-ext.cnf"
     build_san_config "$extfile"
 
+    key_reused=0
+    if [ -s "$KEY_FILE" ] && openssl pkey -in "$KEY_FILE" -noout >/dev/null 2>&1; then
+        cp "$KEY_FILE" "$tmpdir/key.pem"
+        chmod 0600 "$tmpdir/key.pem"
+        key_reused=1
+        echo "[TLS] reutilizando ssl/key.pem existente."
+    else
+        echo "[TLS] chave privada ausente/inválida; gerando nova chave."
+        openssl genpkey -algorithm RSA             -pkeyopt rsa_keygen_bits:3072             -out "$tmpdir/key.pem" >/dev/null 2>&1
+    fi
+
     echo "[TLS] emitindo certificado para $TLS_HOST..."
-    openssl req -new -newkey rsa:3072 -sha256 -nodes         -subj "/CN=$TLS_HOST"         -keyout "$tmpdir/key.pem"         -out "$tmpdir/server.csr" >/dev/null 2>&1
+    openssl req -new -sha256         -subj "/CN=$TLS_HOST"         -key "$tmpdir/key.pem"         -out "$tmpdir/server.csr" >/dev/null 2>&1
 
     serial="0x$(openssl rand -hex 16)"
     openssl x509 -req         -in "$tmpdir/server.csr"         -CA "$CA_CERT_FILE"         -CAkey "$CA_KEY_FILE"         -set_serial "$serial"         -days "$CERT_DAYS"         -sha256         -extfile "$extfile"         -extensions server_ext         -out "$tmpdir/cert.pem" >/dev/null 2>&1
@@ -176,10 +187,14 @@ generate_server_cert() {
     cert_has_name "$tmpdir/cert.pem" "127.0.0.1"
 
     backup_if_exists "$CERT_FILE" invalid
-    backup_if_exists "$KEY_FILE" invalid
-
-    install -m 0600 "$tmpdir/key.pem" "$KEY_FILE"
     install -m 0644 "$tmpdir/cert.pem" "$CERT_FILE"
+
+    if [ "$key_reused" -eq 1 ]; then
+        chmod 0600 "$KEY_FILE"
+    else
+        backup_if_exists "$KEY_FILE" invalid
+        install -m 0600 "$tmpdir/key.pem" "$KEY_FILE"
+    fi
 }
 
 tmpdir="$(mktemp -d)"
