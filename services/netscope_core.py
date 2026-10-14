@@ -760,21 +760,30 @@ class Store:
         return changed
 
     def mark_offline(self, found_keys):
+        """Require consecutive missed scans before declaring a host offline.
 
-        found=set(found_keys or ())
+        Ping/ARP silence is inconclusive (firewalls, sleep, packet loss).
+        Preserve reachability observed by other discovery cycles.
+        """
+        found = set(found_keys or ())
+        threshold = 3
         with self._lock:
             self._load()
             for d in self._cache['devices']:
                 if d.get('deleted'):
                     continue
-                keys={(d.get('mac') or '').lower(), (d.get('uid') or '').lower(),
-                      'ip:' + str(d.get('ip') or '')}
-                if any(k and k in found for k in keys):
-                    d['status']='online'
-                elif d.get('has_agent') and d.get('agent_status') == 'active':
-                    d['status']='online'
+                keys = {(d.get('mac') or '').lower(),
+                        (d.get('uid') or '').lower(),
+                        'ip:' + str(d.get('ip') or '')}
+                seen = any(k and k in found for k in keys)
+                if seen or (d.get('has_agent') and d.get('agent_status') == 'active'):
+                    d['status'] = 'online'
+                    d['missed_scans'] = 0
                 else:
-                    d['status']='offline'
+                    misses = int(d.get('missed_scans') or 0) + 1
+                    d['missed_scans'] = min(misses, threshold)
+                    if misses >= threshold:
+                        d['status'] = 'unverified'
             self._flush()
 
     def create_device(self, body, cfg):
@@ -1013,34 +1022,21 @@ class Store:
             return True, 200
 
     def infer_links(self, cfg):
+        """Remove speculative L2 links; IP proximity is not topology proof.
 
+        Physical parent relationships require a trusted observation (e.g.,
+        LLDP/CDP, switch port/FDB). Preserve manually assigned links.
+        """
         with self._lock:
             self._load()
-            devices = self.active()
-            if not devices:
-                return 0
-            gw_map = {(n.get('subnet') or n.get('cidr')): n.get('gateway', '').lower() for n in cfg.get('networks', []) if (n.get('subnet') or n.get('cidr'))}
-            groups = {}
-            for d in devices:
-                groups.setdefault(d.get('subnet', '?'), []).append(d)
             changed = 0
-            for subnet, devs in groups.items():
-                gw_ip = gw_map.get(subnet, '')
-                gateway = next((d for d in devs if d.get('ip') == gw_ip), None)
-                if not gateway:
-                    gateway = next((d for d in devs if d.get('ip', '').endswith('.1')), None)
-                if not gateway:
-                    devs.sort(key=lambda d: _ip_sort_key(d.get('ip')))
-                    gateway = devs[0] if devs else None
-                if not gateway:
+            for d in self._cache['devices']:
+                if d.get('deleted') or not d.get('parent_inferred'):
                     continue
-                gw_key = dev_key(gateway)
-                for d in devs:
-                    if dev_key(d) != gw_key and not d.get('parent_id'):
-                        d['parent_id'] = gw_key
-                        d['parent_inferred'] = True
-                        d['parent_confidence'] = 75
-                        changed += 1
+                d['parent_id'] = None
+                d['parent_inferred'] = False
+                d.pop('parent_confidence', None)
+                changed += 1
             if changed:
                 self._flush()
             return changed
