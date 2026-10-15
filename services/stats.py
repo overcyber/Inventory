@@ -90,44 +90,20 @@ def get_all_machines():
         return []
 
 def get_cached_machines():
+    """Read current canonical assets, never historical Redis machine snapshots.
 
-    app = current_app._get_current_object()
-    if not hasattr(app, 'MACHINES_CACHE'):
-        app.MACHINES_CACHE = {'data': None, 'last_update': 0}
+    The old inventory:machines cache can outlive source reconfiguration and
+    contain removed assets; it must not control inventory/search correctness.
+    A database error is allowed to propagate rather than serving ghost assets.
+    """
+    from services.asset_core import list_machine_views
+    return list_machine_views(active_only=True)
 
-    shared = shared_cache.get_json('machines')
-    if shared is not None:
-        app.MACHINES_CACHE['data'] = shared
-        app.MACHINES_CACHE['last_update'] = time.time()
-        return shared
-
-    if (app.MACHINES_CACHE['data'] is not None
-            and (time.time() - app.MACHINES_CACHE['last_update']) <= CACHE_TIMEOUT):
-        return app.MACHINES_CACHE['data']
-
-    machines = get_all_machines()
-    app.MACHINES_CACHE['data'] = machines
-    app.MACHINES_CACHE['last_update'] = time.time()
-    shared_cache.set_json('machines', machines, ttl=shared_cache.TTL_MACHINES)
-    return machines
 
 def get_cached_stats():
+    """Calculate counts from the same current source used by search."""
+    return get_machine_stats(get_cached_machines())
 
-    app = current_app._get_current_object()
-    current_time = time.time()
-    shared = shared_cache.get_json('stats')
-    if shared is not None:
-        app.STATS_CACHE['data'] = shared
-        app.STATS_CACHE['last_update'] = current_time
-        return shared
-    if app.STATS_CACHE['data'] and (current_time - app.STATS_CACHE['last_update']) <= CACHE_TIMEOUT:
-        return app.STATS_CACHE['data']
-    machines = get_cached_machines()
-    stats = get_machine_stats(machines)
-    app.STATS_CACHE['data'] = stats
-    app.STATS_CACHE['last_update'] = current_time
-    shared_cache.set_json('stats', stats, ttl=shared_cache.TTL_STATS)
-    return stats
 
 def get_netscope_wazuh_stats():
     """Wazuh counters constrained to the active NetScope device population."""
