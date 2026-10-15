@@ -1,60 +1,54 @@
-# NetScope — Inferir topologia (versão baseada em evidências)
+# NetScope — Inferir baseado em evidências
 
-## O que foi corrigido
+> Este documento substitui a versão anterior que registrava LLDP/CDP/FDB como limitação futura. Essas fontes já estão implementadas no modo Avançado.
 
-A versão anterior do botão **Inferir** apenas removia conexões inferidas,
-sem reconstruir nenhuma ligação. Isso produzia um grafo fragmentado.
-O algoritmo foi substituído, preservando links manuais.
+## Modos
 
-## Hierarquia de evidências
+- **Básico:** descoberta ativa + análise passiva local + fluxos + gateway.
+- **Avançado:** tudo do Básico + SNMP/LLDP/CDP/FDB/VLAN.
 
-1. **Manual** — conexão definida pelo operador: preservada, não reescrita.
-2. **Porta de switch configurada** — dados do cadastro de Switches
-   (ou `switch_port` cadastrado no dispositivo). É uma associação
-   **física declarada/configurada**, não uma observação LLDP ou CDP.
-3. **Gateway da rede** — associa dispositivos ao equipamento que tem
-   exatamente o endereço de gateway cadastrado, se esse equipamento
-   aparece uma única vez no inventário. É relação **lógica L3**,
-   não cabeamento físico. Representada por ligação pontilhada.
-4. **Sem evidências** — o dispositivo permanece sem vínculo inferido.
-   Não se escolhe arbitrariamente `.1` ou o primeiro IP do segmento.
+## Prioridade
 
-## Restrições de segurança e consistência
+1. vínculo manual;
+2. LLDP/CDP;
+3. porta configurada;
+4. candidato FDB;
+5. próximo salto passivo;
+6. gateway lógico.
 
-- Não altera ligações manuais.
-- Não cria ciclos.
-- Se houver dois dispositivos usando o IP de gateway, não o usa como pai.
-- Se um dispositivo estiver configurado em múltiplas portas de switch,
-  a atribuição é considerada ambígua.
-- Revisita inferências antigas e remove as que não têm evidência atual.
-- Oferece **prévia de alterações e confirmação** antes de gravar.
-- Execuções repetidas sem alteração na configuração são idempotentes.
+## Segurança
 
-## Cenário conhecido
+- vínculos manuais são preservados;
+- ciclos são rejeitados;
+- ambiguidades não são resolvidas arbitrariamente;
+- FDB não prova cabeamento;
+- gateway duplicado não vira pai;
+- preview é calculado antes da gravação.
 
-Para `192.168.10.0/24`, quando `192.168.10.1` estiver inventariado
-e configurado como gateway, os dispositivos sem ligação manual/portas
-podem ser agrupados logicamente ao gateway.
+## Relações
 
-Para `192.168.1.0/24`, caso o gateway configurado não apareça no
-inventário, os dispositivos permanecem sem pai inferido; inventariar
-o gateway real e mapear portas de switches permite aprimorar o diagrama.
+| relation | interpretação |
+| --- | --- |
+| physical-configured | porta declarada pelo operador |
+| physical-lldp | vizinho físico LLDP |
+| physical-cdp | vizinho físico CDP |
+| physical-fdb-candidate | provável acesso baseado em FDB |
+| passive-next-hop | próximo salto Ethernet observado |
+| logical-gateway | agrupamento lógico L3 |
 
-## Limitação atual
+## Fluxos
 
-O projeto contém configuração de portas de switches, mas **não possui
-um pipeline comprovado de descoberta automática LLDP/CDP ou FDB** usado
-por este inferidor. A versão não deve afirmar que as conexões lógicas
-são cabos físicos reais. Para topologia física automática, é preciso
-implantar e validar coleta SNMP LLDP/CDP/FDB e relacionar interfaces/portas
-aos respectivos ativos, com timestamp e procedência por aresta.
+A centralidade de comunicação é usada para inferir papéis funcionais, não cabeamento:
 
-## Testar
+- network-transit-candidate;
+- communication-centralizer;
+- dns-service;
+- dhcp-service.
 
-```bash
-pytest -q tests/test_netscope_topology.py
-```
+## Documentação completa
 
-Na interface, clique **Inferir**, revise a contagem de conexões configuradas,
-lógicas e manuais e confirme a aplicação. O campo **Evidência** no popover
-do dispositivo distingue a natureza de cada ligação.
+Consulte:
+
+- [NETSCOPE_TOPOLOGY_INFERENCE.md](NETSCOPE_TOPOLOGY_INFERENCE.md)
+- [NETSCOPE_DISCOVERY_IDENTITY.md](NETSCOPE_DISCOVERY_IDENTITY.md)
+- [NETSCOPE_DATA_MODEL.md](NETSCOPE_DATA_MODEL.md)

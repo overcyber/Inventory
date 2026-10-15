@@ -27,6 +27,55 @@ Os principais objetivos do sistema **INVENTORY** são:
 - **Documentar a topologia de rede** com o NetScope — inclusive ativos sem agente Wazuh.
 - **Alertar proativamente** sobre riscos (conflitos de IP/MAC, portas de risco, SO sem suporte, agentes offline) pela Central de Notificações.
 
+### 1.2. Evoluções do fork `overcyber/Inventory`
+
+Este fork evolui o projeto original `Maarckz/Inventory` para uma plataforma de **Asset Intelligence multifuente** e amplia o NetScope com descoberta, identidade e inferência de topologia baseadas em evidências. A comparação funcional documentada foi feita contra `Maarckz/Inventory@79be5e5`.
+
+| Área adicionada/refatorada | Resumo |
+| --- | --- |
+| **Asset Core canônico** | Identidade UUID, resolução multifuente, proveniência, confiança, snapshots, diffs e entidades temporais. |
+| **Wazuh opcional** | O sistema opera com `WAZUH_ENABLED=false`; Wazuh passa a ser uma fonte, não uma dependência estrutural. |
+| **Novas fontes** | NetScope, osquery, SNMP v2c/v3, SSH, WinRM, Wazuh Indexer, Inventory Agent e ingestão via API. |
+| **API de ingestão** | Endpoints do Asset Core, token de máquina e ingestão manual/batch para integrar outras fontes. |
+| **Eventos opcionais** | Outbox transacional, webhooks e Kafka opcionais; o núcleo funciona sem Kafka. |
+| **Microserviços Docker** | Web, scheduler, discovery, worker/outbox, PostgreSQL, Redis, Caddy/cert-init e perfis opcionais de eventos/mTLS. |
+| **Alembic + CI** | Evolução de schema versionada, migrações idempotentes, testes PostgreSQL reais, validação do Compose e CodeQL. |
+| **Scheduler e resiliência** | Fontes executadas de forma desacoplada; falha de Wazuh/SNMP não precisa interromper as demais fontes nem a aplicação. |
+| **Ingestão mTLS opcional** | Perfil separado para ingestão máquina-a-máquina protegida por certificado, complementar aos tokens de API. |
+| **TLS local** | CA privada local, renovação/validação automática de certificado e scripts de instalação da CA nos clientes. |
+| **NetScope — disponibilidade** | Scan executado no worker com rede do host; ICMP + ARP + TCP; falha de ping não implica offline; estado `unverified`. |
+| **NetScope — identidade** | MAC não é derivado de IP; ARP/DHCPACK/Ethernet mantêm observações temporais; MAC existente não é sobrescrito automaticamente. |
+| **NetScope — modo Básico** | Descoberta ativa + captura passiva local AF_PACKET, Ethernet/IP/VLAN, agregados de fluxo, PageRank, centralidade e próximo salto. |
+| **NetScope — modo Avançado** | Básico + SNMP/LLDP/CDP/BRIDGE-MIB/Q-BRIDGE-MIB/FDB, mantendo cada observação como evidência rastreável. |
+| **Inferir baseado em evidências** | Prioridade para vínculos manuais e evidências fortes, prévia antes de gravar, prevenção de ciclos e recusa de ambiguidades. |
+| **FDB segura** | Uma MAC aprendida na FDB não vira automaticamente uma conexão física; uplinks e portas com múltiplas MACs são tratados como ambíguos. |
+| **Topologia multiperspectiva** | Relações lógicas L3, próximo salto L2 e vizinhança física LLDP/CDP são diferenciadas visual e semanticamente. |
+
+#### Arquitetura da refatoração
+
+```mermaid
+flowchart LR
+    W["Wazuh API / Indexer<br/>(opcional)"] --> IS["InventorySource"]
+    N["NetScope<br/>ativo + passivo"] --> IS
+    O["osquery"] --> IS
+    S["SNMP / LLDP / CDP / FDB"] --> IS
+    R["SSH / WinRM"] --> IS
+    A["Inventory Agent / API"] --> IS
+
+    IS --> AC["Asset Core<br/>identidade + merge + histórico"]
+    AC --> PG[("PostgreSQL")]
+    AC --> WEB["Flask Web / API"]
+    AC --> OUT["Outbox transacional"]
+    OUT -. "opcional" .-> EVT["Kafka / Webhooks"]
+
+    N --> TE["Topology Evidence"]
+    S --> TE
+    TE --> INF["NetScope Inferir"]
+    INF --> WEB
+```
+
+A implementação do NetScope **não depende do AEGIS** e não consome seus eventos. A análise de fluxos necessária para topologia é produzida localmente e persistida pelo próprio Inventory.
+
 ---
 
 ## 2. Arquitetura da Solução e Fluxo de Dados
@@ -1012,3 +1061,23 @@ docker compose --profile events up -d
 ```bash
 docker compose --profile mtls up -d
 ```
+
+---
+
+## 14. Documentação da refatoração
+
+A documentação abaixo separa o catálogo funcional das referências operacionais e técnicas:
+
+| Documento | Conteúdo |
+| --- | --- |
+| [`docs/REFATORACAO_FEATURES.md`](docs/REFATORACAO_FEATURES.md) | Catálogo mestre de todas as funcionalidades adicionadas em relação ao repositório original. |
+| [`docs/ARCHITECTURE_ASSET_CORE.md`](docs/ARCHITECTURE_ASSET_CORE.md) | Arquitetura canônica multifuente, identidade, merge, histórico e eventos. |
+| [`docs/IMPLEMENTACAO_COMPLETA_020.md`](docs/IMPLEMENTACAO_COMPLETA_020.md) | Implementação Asset Intelligence v0.20 e matriz de requisitos. |
+| [`docs/NETSCOPE_DISCOVERY_IDENTITY.md`](docs/NETSCOPE_DISCOVERY_IDENTITY.md) | Descoberta ativa/passiva, disponibilidade, MAC/IP, DHCPACK, filas e segurança de identidade. |
+| [`docs/NETSCOPE_TOPOLOGY_INFERENCE.md`](docs/NETSCOPE_TOPOLOGY_INFERENCE.md) | Modos Básico/Avançado, análise de fluxo, evidências, LLDP/CDP/FDB e algoritmo Inferir. |
+| [`docs/NETSCOPE_DATA_MODEL.md`](docs/NETSCOPE_DATA_MODEL.md) | Novas tabelas, campos, retenção, confiança e proveniência das evidências. |
+| [`docs/OPERACAO_REFATORADA.md`](docs/OPERACAO_REFATORADA.md) | Deploy Docker, migrations, configuração, validação, troubleshooting e rollback. |
+| [`docs/TLS_LOCAL.md`](docs/TLS_LOCAL.md) | CA local, certificados e instalação de confiança nos clientes. |
+| [`docs/openapi.yaml`](docs/openapi.yaml) | Contrato da API Asset Core. |
+
+Para detalhes históricos do planejamento e auditoria, consulte também [`docs/PLANEJAMENTO_ALTERACOES.md`](docs/PLANEJAMENTO_ALTERACOES.md) e [`docs/AUDITORIA_CORRETIVA_019.md`](docs/AUDITORIA_CORRETIVA_019.md).
