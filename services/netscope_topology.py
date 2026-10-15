@@ -109,7 +109,7 @@ def infer_topology(devices, config, evidence=None):
                 _add_candidate(
                     candidates, child_id, switch_key, priority=100,
                     confidence=0.90, relation="physical-configured",
-                    evidence=f"switch-port-configured:{port}")
+                    evidence=f"switch-port:{port}")
 
     # Persisted observations. Basic mode accepts only passive evidence.
     for ev in evidence or []:
@@ -179,7 +179,11 @@ def infer_topology(devices, config, evidence=None):
         best_priority = max(o["_priority"] for o in options)
         best = [o for o in options if o["_priority"] == best_priority]
         peers = {o["parent_id"] for o in best}
-        if len(peers) != 1:
+        configured_ports = {
+            o["parent_evidence"] for o in best
+            if o["parent_relation"] == "physical-configured"
+        }
+        if len(peers) != 1 or len(configured_ports) > 1:
             conflicts += 1
             continue
         proposal = sorted(
