@@ -226,13 +226,22 @@ def _dedup_devices_locked():
         duplicate = None
         reason = ''
         for key in _duplicate_index_keys(dev):
-            if key in indexes:
-                duplicate = indexes[key]
-                reason = key[0]
-                break
+            candidate = indexes.get(key)
+            if candidate is None:
+                continue
+            if key[0] == 'ip':
+                a = (candidate.get('mac') or '').strip().lower()
+                b = (dev.get('mac') or '').strip().lower()
+                # Same IP is not enough to merge two verified, distinct MACs.
+                # Preserve it as a real network conflict.
+                if a and b and a != b:
+                    continue
+            duplicate = candidate
+            reason = key[0]
+            break
         if duplicate is None:
             for key in _duplicate_index_keys(dev):
-                indexes[key] = dev
+                indexes.setdefault(key, dev)
             continue
         keep, dup = ((duplicate, dev) if _survivor_rank(duplicate) <= _survivor_rank(dev)
                      else (dev, duplicate))

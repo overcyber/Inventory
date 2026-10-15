@@ -223,7 +223,7 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
     # Clean up only the duplicate pattern created by a provisional
     # MAC-less row plus one verified MAC on the same IP. Real multi-MAC IP
     # conflicts are intentionally preserved.
-    reconciled_before = store.reconcile_weak_ip_duplicates(flush=True)
+    reconciled_before = store.reconcile_weak_ip_duplicates_db()
 
     if all_found:
         dns_results = {}
@@ -249,7 +249,7 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
             if mac:
                 found_macs.add(mac)
         store.mark_offline(found_macs)
-        reconciled_after = store.reconcile_weak_ip_duplicates(flush=True)
+        reconciled_after = store.reconcile_weak_ip_duplicates_db()
     else:
         # Failed/empty scan does not prove the whole network is down.
         new_count = 0

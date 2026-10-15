@@ -530,10 +530,17 @@ class Store:
         if not ip:
             return None
         pool = self._load()['devices'] if include_deleted else self.active()
-        for d in pool:
-            if (d.get('ip') or '') == ip:
-                return d
-        return None
+        matches = [d for d in pool if (d.get('ip') or '') == ip]
+        if not matches:
+            return None
+        # Prefer a verified hardware identity over provisional IP-only rows.
+        # Keep the choice deterministic so every worker resolves the same row.
+        matches.sort(key=lambda d: (
+            0 if (d.get('mac') or '').strip() else 1,
+            0 if (d.get('has_agent') else 1),
+            str(d.get('uid') or ''),
+        ))
+        return matches[0]
 
     def ip_conflicts(self):
 
@@ -736,6 +743,138 @@ class Store:
         weak['merge_reason'] = reason
         weak['status'] = 'merged'
         return True
+
+    def reconcile_weak_ip_duplicates_db(self):
+        """Reconcile persisted strong+MAC-less duplicate IP rows directly.
+
+        This bypasses process-local cache ordering. It only handles the safe
+        pattern: exactly one active row with a real MAC and one or more active
+        rows without MAC for the same IP. Multi-MAC conflicts are preserved.
+        """
+        from models import db, NetscopeDevice, NetscopeSetting
+
+        with self._lock:
+            rows = NetscopeDevice.query.filter(
+                NetscopeDevice.deleted.is_(False),
+                NetscopeDevice.ip != '',
+            ).order_by(NetscopeDevice.ip, NetscopeDevice.id).all()
+
+            groups = {}
+            for row in rows:
+                groups.setdefault((row.ip or '').strip(), []).append(row)
+
+            merged = 0
+            affected_uids = {}
+            for ip, same_ip in groups.items():
+                strong = [r for r in same_ip if (r.mac or '').strip()]
+                weak = [r for r in same_ip if not (r.mac or '').strip()]
+                if len(strong) != 1 or not weak:
+                    continue
+
+                canonical_row = strong[0]
+                canonical = dict(canonical_row.data or {})
+                canonical['mac'] = (canonical_row.mac or '').lower()
+                canonical['ip'] = canonical_row.ip or ''
+                canonical['deleted'] = False
+                canonical_uid = str(
+                    canonical.get('uid') or canonical_row.mac or '').lower()
+                canonical['uid'] = canonical_uid
+
+                for weak_row in weak:
+                    weak_doc = dict(weak_row.data or {})
+                    weak_uid = str(
+                        weak_doc.get('uid') or '').lower()
+                    if not weak_uid:
+                        weak_uid = f'db-row:{weak_row.id}'
+
+                    fill_fields = (
+                        'hostname', 'dns_name', 'vendor', 'notes', 'user',
+                        'department', 'location', 'asset_tag', 'model',
+                        'serial_number', 'os', 'seal_number', 'switch_port',
+                        'parent_id', 'pos', 'agent_id', 'agent_name',
+                        'agent_status', 'agent_last_keepalive', 'agent_groups',
+                        'agent_ip',
+                    )
+                    for field in fill_fields:
+                        if not canonical.get(field) and weak_doc.get(field):
+                            canonical[field] = weak_doc[field]
+
+                    if (canonical.get('type') in (None, '', 'desktop')
+                            and weak_doc.get('type') not in (None, '', 'desktop')):
+                        canonical['type'] = weak_doc['type']
+                    if weak_doc.get('has_agent'):
+                        canonical['has_agent'] = True
+                    if weak_doc.get('agent_exempt'):
+                        canonical['agent_exempt'] = True
+                    if weak_doc.get('name_manual'):
+                        canonical['name_manual'] = True
+
+                    first_values = [x for x in (
+                        canonical.get('first_seen'),
+                        weak_doc.get('first_seen')) if x]
+                    if first_values:
+                        canonical['first_seen'] = min(first_values)
+                    last_values = [x for x in (
+                        canonical.get('last_seen'),
+                        weak_doc.get('last_seen')) if x]
+                    if last_values:
+                        canonical['last_seen'] = max(last_values)
+
+                    weak_doc['deleted'] = True
+                    weak_doc['deleted_at'] = datetime.now().isoformat()
+                    weak_doc['merged_into'] = canonical_uid
+                    weak_doc['merge_reason'] = (
+                        'Reconciliação DB: registro provisório sem MAC '
+                        'duplicava identidade verificada no mesmo IP'
+                    )
+                    weak_doc['status'] = 'merged'
+                    weak_row.deleted = True
+                    weak_row.data = weak_doc
+                    affected_uids[weak_uid] = canonical_uid
+                    merged += 1
+
+                canonical_row.hostname = (
+                    canonical.get('hostname') or canonical_row.hostname or '')
+                canonical_row.last_seen = _parse_dt(
+                    canonical.get('last_seen')) or canonical_row.last_seen
+                canonical_row.data = canonical
+
+            if affected_uids:
+                # Redirect parent references stored in every device JSON.
+                all_rows = NetscopeDevice.query.all()
+                for row in all_rows:
+                    doc = dict(row.data or {})
+                    parent = str(doc.get('parent_id') or '').lower()
+                    replacement = affected_uids.get(parent)
+                    if replacement:
+                        doc['parent_id'] = replacement
+                        row.data = doc
+
+                # Redirect configured switch-port references.
+                setting = NetscopeSetting.query.filter_by(
+                    key=CONFIG_KEY).first()
+                if setting and isinstance(setting.value, dict):
+                    cfg = json.loads(json.dumps(setting.value))
+                    changed_cfg = False
+                    for sw in (cfg.get('switches') or {}).values():
+                        if not isinstance(sw, dict):
+                            continue
+                        for port in (sw.get('ports') or {}).values():
+                            if not isinstance(port, dict):
+                                continue
+                            key = str(port.get('device_mac') or '').lower()
+                            replacement = affected_uids.get(key)
+                            if replacement:
+                                port['device_mac'] = replacement
+                                changed_cfg = True
+                    if changed_cfg:
+                        setting.value = cfg
+
+            if merged:
+                db.session.commit()
+                self._cache = None
+                self._cache_loaded_at = 0.0
+            return merged
 
     def reconcile_weak_ip_duplicates(self, flush=True):
         """Collapse only system-generated strong+MAC-less duplicate IP rows.

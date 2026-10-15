@@ -17,7 +17,7 @@ app = create_app()
 with app.app_context():
     try:
         from services.netscope_core import store
-        reconciled = store.reconcile_weak_ip_duplicates(flush=True)
+        reconciled = store.reconcile_weak_ip_duplicates_db()
         if reconciled:
             app.logger.warning(
                 '[Discovery] reconciliados %s duplicado(s) provisório(s) de IP',

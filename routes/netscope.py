@@ -125,6 +125,13 @@ def api_config():
     return jsonify(load_config())
 
 
+@ns_bp.route('/api/reconcile-ip-duplicates', methods=['POST'])
+@ns_login_required
+def api_reconcile_ip_duplicates():
+    merged = store.reconcile_weak_ip_duplicates_db()
+    return jsonify({'ok': True, 'merged': merged})
+
+
 @ns_bp.route('/api/topology/status')
 @ns_login_required
 def api_topology_status():
