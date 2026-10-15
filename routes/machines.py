@@ -94,6 +94,19 @@ def search():
 
         return render_template('search.html', results=results, query=query)
 
+    # Structured agent status must query actual Wazuh association, not network status.
+    if query.startswith('agent_info:status:'):
+        import os
+        if os.getenv('WAZUH_ENABLED', 'false').lower() not in ('true', '1', 'yes', 'on'):
+            return render_template('search.html', results=[], query=query)
+        status = query.rsplit(':', 1)[-1].strip()
+        results = [
+            m for m in machines
+            if m.get('has_wazuh_agent')
+            and str(m.get('agent_status_raw') or '').strip().lower() == status
+        ]
+        return render_template('search.html', results=results, query=query)
+
     if ':' in query:
         tag_parts = query.split(':')
         tag = tag_parts[0].strip()
