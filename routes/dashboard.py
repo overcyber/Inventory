@@ -7,6 +7,7 @@ from core.config import APP_VERSION
 from core.security import login_required
 from services.stats import (
     get_cached_stats, get_cached_machines, build_chart_response,
+    get_canonical_wazuh_stats,
 )
 
 ROUTES = [
@@ -29,20 +30,15 @@ def dashboard():
     app = _app()
     stats = get_cached_stats()
 
-    ns_total = ns_with_agent = ns_without_agent = ns_agent_exempt = 0
-    ns_agent_online = ns_agent_offline = ns_agent_unknown = 0
-    try:
-        from services.netscope_core import store
-        ns_stats = store.stats()
-        ns_total = ns_stats.get('total', 0)
-        ns_with_agent = ns_stats.get('with_agent', 0)
-        ns_without_agent = ns_stats.get('without_agent', 0)
-        ns_agent_exempt = ns_stats.get('agent_exempt', 0)
-        ns_agent_online = ns_stats.get('agent_online', 0)
-        ns_agent_offline = ns_stats.get('agent_offline', 0)
-        ns_agent_unknown = ns_stats.get('agent_unknown', 0)
-    except Exception as e:
-        app.logger.debug(f"[Dashboard] NetScope stats indisponíveis: {e}")
+    machines = get_cached_machines()
+    wz = get_canonical_wazuh_stats(machines)
+    ns_total = wz['total']
+    ns_with_agent = wz['with_agent']
+    ns_without_agent = wz['without_agent']
+    ns_agent_exempt = wz['agent_exempt']
+    ns_agent_online = wz['agent_online']
+    ns_agent_offline = wz['agent_offline']
+    ns_agent_unknown = wz['agent_unknown']
 
     db_layout = None
     try:

@@ -701,6 +701,10 @@ def asset_to_machine(asset) -> dict:
         'source': s.get('source') or [],
         'has_agent': any(x in ('wazuh','wazuh_indexer','osquery','inventory_agent','ssh','winrm')
                          for x in (s.get('source') or [])),
+        'has_wazuh_agent': any(
+            x in ('wazuh', 'wazuh_indexer') for x in (s.get('source') or [])
+        ) or bool(s.get('wazuh_agent_id')),
+        'agent_exempt': bool(s.get('agent_exempt', False)),
         'vendor': s.get('vendor') or '',
         'device_type': s.get('device_type') or '',
         'switch_port': s.get('switch_port') or '',

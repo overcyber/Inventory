@@ -129,6 +129,61 @@ def get_cached_stats():
     shared_cache.set_json('stats', stats, ttl=shared_cache.TTL_STATS)
     return stats
 
+def get_canonical_wazuh_stats(machines=None):
+    """Wazuh coverage over the canonical active Asset Core population."""
+    if machines is None:
+        machines = get_cached_machines()
+
+    total = len(machines)
+    with_agent = 0
+    without_agent = 0
+    exempt = 0
+    online = 0
+    offline = 0
+    unknown = 0
+    status_detail = {'active': 0, 'disconnected': 0, 'never_connected': 0}
+
+    for machine in machines:
+        if machine.get('agent_exempt'):
+            exempt += 1
+            continue
+
+        if machine.get('has_wazuh_agent'):
+            with_agent += 1
+            raw = str(machine.get('agent_status_raw') or '').strip().lower()
+            if raw == 'active':
+                online += 1
+                status_detail['active'] += 1
+            elif raw == 'never_connected':
+                offline += 1
+                status_detail['never_connected'] += 1
+            elif raw in ('disconnected', 'offline'):
+                offline += 1
+                status_detail['disconnected'] += 1
+            else:
+                unknown += 1
+        else:
+            without_agent += 1
+
+    # Invariant: Wazuh counters can never exceed canonical active assets.
+    assert with_agent + without_agent + exempt == total
+    assert online + offline + unknown == with_agent
+
+    return {
+        'total': total,
+        'with_agent': with_agent,
+        'without_agent': without_agent,
+        'agent_exempt': exempt,
+        'agent_online': online,
+        'agent_offline': offline,
+        'agent_unknown': unknown,
+        'agent_status_detail': status_detail,
+        'agent_coverage': round(
+            100.0 * with_agent / (with_agent + without_agent), 1
+        ) if (with_agent + without_agent) else 0,
+    }
+
+
 def build_chart_response(stats, machines):
 
     app = current_app._get_current_object()
@@ -196,54 +251,46 @@ def build_chart_response(stats, machines):
         timeline_data['inactive'].append(inat)
 
     ns_types = {}
-    ns_total = ns_with_agent = ns_without_agent = ns_agent_exempt = 0
-    ns_agent_online = ns_agent_offline = ns_agent_unknown = 0
-    agent_status_detail = {'active': 0, 'disconnected': 0, 'never_connected': 0}
-    keepalive_buckets = {'today': 0, 'week': 0, 'month': 0, 'old': 0}
-    now_dt = datetime.now()
+    ns_total = 0
     try:
         from services.netscope_core import store as _ns_store
-        for d in _ns_store.active():
-            ns_total += 1
-            if d.get('has_agent'):
-                ns_with_agent += 1
-                raw_st = str(d.get('agent_status') or '').strip().lower()
-                if raw_st == 'active':
-                    ns_agent_online += 1
-                    agent_status_detail['active'] += 1
-                elif raw_st == 'never_connected':
-                    ns_agent_offline += 1
-                    agent_status_detail['never_connected'] += 1
-                elif raw_st in ('disconnected', 'offline'):
-                    ns_agent_offline += 1
-                    agent_status_detail['disconnected'] += 1
-                else:
-                    ns_agent_unknown += 1
-
-                ls = d.get('agent_last_keepalive')
-                if ls:
-                    try:
-                        m_dt = datetime.fromisoformat(
-                            str(ls).replace('Z', '+00:00')).replace(tzinfo=None)
-                        age_days = (now_dt - m_dt).days
-                        if age_days <= 0:
-                            keepalive_buckets['today'] += 1
-                        elif age_days <= 7:
-                            keepalive_buckets['week'] += 1
-                        elif age_days <= 30:
-                            keepalive_buckets['month'] += 1
-                        else:
-                            keepalive_buckets['old'] += 1
-                    except (ValueError, TypeError):
-                        pass
-            elif d.get('agent_exempt'):
-                ns_agent_exempt += 1
-            else:
-                ns_without_agent += 1
+        active_network = _ns_store.active()
+        ns_total = len(active_network)
+        for d in active_network:
             t = d.get('type') or 'desktop'
             ns_types[t] = ns_types.get(t, 0) + 1
     except Exception as e:
         app.logger.debug(f"[Dashboard] NetScope extra indisponível: {e}")
+
+    wazuh = get_canonical_wazuh_stats(machines)
+    ns_with_agent = wazuh['with_agent']
+    ns_without_agent = wazuh['without_agent']
+    ns_agent_exempt = wazuh['agent_exempt']
+    ns_agent_online = wazuh['agent_online']
+    ns_agent_offline = wazuh['agent_offline']
+    ns_agent_unknown = wazuh['agent_unknown']
+    agent_status_detail = wazuh['agent_status_detail']
+    keepalive_buckets = {'today': 0, 'week': 0, 'month': 0, 'old': 0}
+    now_dt = datetime.now()
+    for m in machines:
+        if not m.get('has_wazuh_agent'):
+            continue
+        ls = m.get('last_seen')
+        if ls:
+            try:
+                m_dt = datetime.fromisoformat(
+                    str(ls).replace('Z', '+00:00')).replace(tzinfo=None)
+                age_days = (now_dt - m_dt).days
+                if age_days <= 0:
+                    keepalive_buckets['today'] += 1
+                elif age_days <= 7:
+                    keepalive_buckets['week'] += 1
+                elif age_days <= 30:
+                    keepalive_buckets['month'] += 1
+                else:
+                    keepalive_buckets['old'] += 1
+            except (ValueError, TypeError):
+                pass
 
     ram_usage_list = []
     for m in machines:
@@ -291,16 +338,15 @@ def build_chart_response(stats, machines):
              'status_key': m.get('device_status', 'N/A')}
             for m in sorted(machines, key=lambda x: str(x.get('last_seen', '')), reverse=True)[:5]
         ],
-        'ns_total': ns_total,
+        'ns_total': wazuh['total'],
+        'netscope_total': ns_total,
         'ns_with_agent': ns_with_agent,
         'ns_without_agent': ns_without_agent,
         'ns_agent_exempt': ns_agent_exempt,
         'ns_agent_online': ns_agent_online,
         'ns_agent_offline': ns_agent_offline,
         'ns_agent_unknown': ns_agent_unknown,
-        'ns_agent_coverage': round(
-            100.0 * ns_with_agent / (ns_with_agent + ns_without_agent), 1
-        ) if (ns_with_agent + ns_without_agent) else 0,
+        'ns_agent_coverage': wazuh['agent_coverage'],
         'ns_types': ns_types,
         'agent_status_detail': agent_status_detail,
         'keepalive_buckets': keepalive_buckets,
