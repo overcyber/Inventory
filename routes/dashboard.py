@@ -40,6 +40,15 @@ def dashboard():
     ns_agent_offline = wz['agent_offline']
     ns_agent_unknown = wz['agent_unknown']
 
+    # Wazuh disabled is an explicit integration state, not a disconnected agent.
+    import os
+    wazuh_enabled = os.getenv('WAZUH_ENABLED', 'false').strip().lower() in (
+        '1', 'true', 'yes', 'on')
+    if not wazuh_enabled:
+        ns_agent_online = 0
+        ns_agent_offline = 0
+        ns_agent_unknown = 0
+
     db_layout = None
     try:
         from models import SystemSetting
@@ -57,6 +66,7 @@ def dashboard():
                            active_count=ns_agent_online,
                            inactive_count=ns_agent_offline,
                            agent_unknown_count=ns_agent_unknown,
+                           wazuh_enabled=wazuh_enabled,
                            ns_total=ns_total,
                            ns_with_agent=ns_with_agent,
                            ns_without_agent=ns_without_agent,
