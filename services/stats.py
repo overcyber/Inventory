@@ -129,6 +129,60 @@ def get_cached_stats():
     shared_cache.set_json('stats', stats, ttl=shared_cache.TTL_STATS)
     return stats
 
+def get_netscope_wazuh_stats():
+    """Wazuh counters constrained to the active NetScope device population."""
+    try:
+        from services.netscope_core import store
+        devices=store.active()
+    except Exception:
+        devices=[]
+
+    total=len(devices)
+    with_agent=0
+    without_agent=0
+    exempt=0
+    online=0
+    offline=0
+    unknown=0
+    status_detail={'active':0,'disconnected':0,'never_connected':0}
+
+    for dev in devices:
+        if dev.get('agent_exempt') and not dev.get('has_agent'):
+            exempt+=1
+            continue
+        if not dev.get('has_agent'):
+            without_agent+=1
+            continue
+
+        with_agent+=1
+        raw=str(dev.get('agent_status') or '').strip().lower()
+        if raw=='active':
+            online+=1
+            status_detail['active']+=1
+        elif raw=='never_connected':
+            offline+=1
+            status_detail['never_connected']+=1
+        elif raw in ('disconnected','offline'):
+            offline+=1
+            status_detail['disconnected']+=1
+        else:
+            unknown+=1
+
+    return {
+        'total':total,
+        'with_agent':with_agent,
+        'without_agent':without_agent,
+        'agent_exempt':exempt,
+        'agent_online':online,
+        'agent_offline':offline,
+        'agent_unknown':unknown,
+        'agent_status_detail':status_detail,
+        'agent_coverage':round(
+            100.0*with_agent/(with_agent+without_agent),1
+        ) if (with_agent+without_agent) else 0,
+    }
+
+
 def get_canonical_wazuh_stats(machines=None):
     """Wazuh coverage over the canonical active Asset Core population."""
     if machines is None:
@@ -229,40 +283,44 @@ def build_chart_response(stats, machines):
     except Exception:
         pass
 
-    timeline_data = {'dates': [], 'active': [], 'inactive': []}
-    today = datetime.now().date()
-    for i in range(6, -1, -1):
-        date = today - timedelta(days=i)
-        timeline_data['dates'].append(date.strftime('%d/%m'))
-        a, inat = 0, 0
-        for machine in machines:
-            ls = machine.get('last_seen')
-            if ls and ls != 'N/A':
-                try:
-                    m_date = datetime.fromisoformat(ls).date() if isinstance(ls, str) else ls.date()
-                    if m_date == date:
-                        if machine.get('device_status') == 'Ativo':
-                            a += 1
-                        else:
-                            inat += 1
-                except Exception:
-                    continue
-        timeline_data['active'].append(a)
-        timeline_data['inactive'].append(inat)
-
     ns_types = {}
-    ns_total = 0
+    active_network = []
     try:
         from services.netscope_core import store as _ns_store
         active_network = _ns_store.active()
-        ns_total = len(active_network)
         for d in active_network:
             t = d.get('type') or 'desktop'
             ns_types[t] = ns_types.get(t, 0) + 1
     except Exception as e:
         app.logger.debug(f"[Dashboard] NetScope extra indisponível: {e}")
 
-    wazuh = get_canonical_wazuh_stats(machines)
+    timeline_data = {'dates': [], 'active': [], 'inactive': []}
+    today = datetime.now().date()
+    agent_devices = [d for d in active_network if d.get('has_agent')]
+    for i in range(6, -1, -1):
+        date = today - timedelta(days=i)
+        timeline_data['dates'].append(date.strftime('%d/%m'))
+        a, inat = 0, 0
+        for dev in agent_devices:
+            ls = dev.get('agent_last_keepalive') or dev.get('last_seen')
+            if not ls:
+                continue
+            try:
+                m_date = datetime.fromisoformat(
+                    str(ls).replace('Z', '+00:00')
+                ).replace(tzinfo=None).date()
+            except (ValueError, TypeError):
+                continue
+            if m_date != date:
+                continue
+            if str(dev.get('agent_status') or '').lower() == 'active':
+                a += 1
+            else:
+                inat += 1
+        timeline_data['active'].append(a)
+        timeline_data['inactive'].append(inat)
+
+    wazuh = get_netscope_wazuh_stats()
     ns_with_agent = wazuh['with_agent']
     ns_without_agent = wazuh['without_agent']
     ns_agent_exempt = wazuh['agent_exempt']
@@ -272,10 +330,8 @@ def build_chart_response(stats, machines):
     agent_status_detail = wazuh['agent_status_detail']
     keepalive_buckets = {'today': 0, 'week': 0, 'month': 0, 'old': 0}
     now_dt = datetime.now()
-    for m in machines:
-        if not m.get('has_wazuh_agent'):
-            continue
-        ls = m.get('last_seen')
+    for dev in agent_devices:
+        ls = dev.get('agent_last_keepalive') or dev.get('last_seen')
         if ls:
             try:
                 m_dt = datetime.fromisoformat(
@@ -339,7 +395,7 @@ def build_chart_response(stats, machines):
             for m in sorted(machines, key=lambda x: str(x.get('last_seen', '')), reverse=True)[:5]
         ],
         'ns_total': wazuh['total'],
-        'netscope_total': ns_total,
+        'netscope_total': wazuh['total'],
         'ns_with_agent': ns_with_agent,
         'ns_without_agent': ns_without_agent,
         'ns_agent_exempt': ns_agent_exempt,

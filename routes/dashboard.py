@@ -7,7 +7,7 @@ from core.config import APP_VERSION
 from core.security import login_required
 from services.stats import (
     get_cached_stats, get_cached_machines, build_chart_response,
-    get_canonical_wazuh_stats,
+    get_netscope_wazuh_stats,
 )
 
 ROUTES = [
@@ -31,7 +31,7 @@ def dashboard():
     stats = get_cached_stats()
 
     machines = get_cached_machines()
-    wz = get_canonical_wazuh_stats(machines)
+    wz = get_netscope_wazuh_stats()
     ns_total = wz['total']
     ns_with_agent = wz['with_agent']
     ns_without_agent = wz['without_agent']

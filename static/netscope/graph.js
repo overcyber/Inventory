@@ -1214,10 +1214,15 @@ function showPopover(node) {
   const exemptRow = (!agYes && node.agent_exempt)
     ? '<div class="pop-row"><span class="lbl"><i class="fas fa-user-slash"></i> ' + t('Agente não aplicável') + '</span><span class="val"><span class="ex-tag">' + t('Isento') + '</span> ' + t('não conta como sem agente') + '</span></div>'
     : '';
+  const allIps = Array.from(new Set([node.ip].concat(node.ips || []).filter(Boolean)));
+  const allMacs = Array.from(new Set([node.mac].concat(node.macs || []).filter(Boolean)));
   let html =
     '<div class="pop-row"><span class="lbl"><i class="fas fa-shield-halved"></i> ' + t('Agente Wazuh') + '</span><span class="val ' + agValCls + '">' + agentStr + '</span></div>' +
     exemptRow +
+    '<div class="pop-row"><span class="lbl">IP</span><span class="val">' + esc(node.ip || '—') + '</span></div>' +
+    (allIps.length > 1 ? '<div class="pop-row"><span class="lbl">IPs / interfaces</span><span class="val">' + allIps.map(esc).join('<br>') + '</span></div>' : '') +
     '<div class="pop-row"><span class="lbl">MAC</span><span class="val">' + esc(node.mac || '—') + '</span></div>' +
+    (allMacs.length > 1 ? '<div class="pop-row"><span class="lbl">MACs / interfaces</span><span class="val">' + allMacs.map(esc).join('<br>') + '</span></div>' : '') +
     '<div class="pop-row"><span class="lbl">DNS</span><span class="val">' + esc(dnsStr) + '</span></div>' +
 
     ((S.conflictUids && (S.conflictUids[node.id] || 0) > 0)

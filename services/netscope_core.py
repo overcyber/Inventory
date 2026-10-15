@@ -308,6 +308,58 @@ def dev_key(dev):
         return ''
     return (dev.get('uid') or dev.get('mac') or '').lower()
 
+def device_ips(dev):
+    """All IPs known for one NetScope device, primary first."""
+    values = []
+    primary = str((dev or {}).get('ip') or '').strip()
+    if primary:
+        values.append(primary)
+    for ip in (dev or {}).get('ips') or []:
+        ip = str(ip or '').strip()
+        if ip and ip not in values:
+            values.append(ip)
+    return values
+
+def device_macs(dev):
+    """All hardware MACs known for one NetScope device, primary first."""
+    values = []
+    primary = str((dev or {}).get('mac') or '').strip().lower()
+    if primary and not primary.startswith('ip:'):
+        values.append(primary)
+    for mac in (dev or {}).get('macs') or []:
+        normalized, err = normalize_mac(str(mac or ''))
+        if normalized and not err and normalized not in values:
+            values.append(normalized)
+    return values
+
+def add_device_ip(dev, ip, *, primary=False):
+    ip = str(ip or '').strip()
+    if not ip:
+        return
+    values = device_ips(dev)
+    if ip not in values:
+        values.append(ip)
+    if primary or not dev.get('ip'):
+        dev['ip'] = ip
+    primary_ip = str(dev.get('ip') or '').strip()
+    dev['ips'] = ([primary_ip] if primary_ip else []) + [
+        value for value in values if value != primary_ip
+    ]
+
+def add_device_mac(dev, mac, *, primary=False):
+    normalized, err = normalize_mac(str(mac or ''))
+    if err or not normalized:
+        return
+    values = device_macs(dev)
+    if normalized not in values:
+        values.append(normalized)
+    if primary or not dev.get('mac'):
+        dev['mac'] = normalized
+    primary_mac = str(dev.get('mac') or '').strip().lower()
+    dev['macs'] = ([primary_mac] if primary_mac else []) + [
+        value for value in values if value != primary_mac
+    ]
+
 def normalize_mac(value):
 
     raw = (value or '').strip().lower()
@@ -522,7 +574,9 @@ class Store:
         key = str(key).lower()
         pool = self._load()['devices'] if include_deleted else self.active()
         for d in pool:
-            if (d.get('uid') or '').lower() == key or (d.get('mac') or '').lower() == key:
+            if (d.get('uid') or '').lower() == key:
+                return d
+            if key in device_macs(d):
                 return d
         return None
 
@@ -530,7 +584,8 @@ class Store:
         if not ip:
             return None
         pool = self._load()['devices'] if include_deleted else self.active()
-        matches = [d for d in pool if (d.get('ip') or '') == ip]
+        target = str(ip).strip()
+        matches = [d for d in pool if target in device_ips(d)]
         if not matches:
             return None
         # Prefer a verified hardware identity over provisional IP-only rows.
@@ -546,10 +601,8 @@ class Store:
 
         by_ip = {}
         for d in self.active():
-            ip = (d.get('ip') or '').strip()
-            if not ip:
-                continue
-            by_ip.setdefault(ip, []).append(d)
+            for ip in device_ips(d):
+                by_ip.setdefault(ip, []).append(d)
         out = []
         for ip, devs in by_ip.items():
             if len(devs) < 2:
@@ -660,7 +713,9 @@ class Store:
             mac = ''
         return {
             'uid': mac or gen_uid(),
-            'mac': mac, 'ip': ip, 'hostname': '', 'dns_name': '',
+            'mac': mac, 'macs': [mac] if mac else [],
+            'ip': ip, 'ips': [ip] if ip else [],
+            'hostname': '', 'dns_name': '',
             'vendor': vendor, 'type': infer_type(ip, vendor, gateway),
             'subnet': subnet or '.'.join(ip.split('.')[:3]) if ip else '',
             'status': 'online', 'parent_id': None,
@@ -933,8 +988,9 @@ class Store:
             # Prefer a verified MAC identity. A ping-only observation must
             # attach to the strongest row for that IP instead of creating
             # a second MAC-less identity.
+            target_ip = str(info.get('ip') or '').strip()
             by_ip = [d for d in self._load()['devices']
-                     if not d.get('deleted') and d.get('ip') == info.get('ip')]
+                     if not d.get('deleted') and target_ip in device_ips(d)]
             by_ip.sort(key=lambda d: bool(d.get('mac')), reverse=True)
             existing = (
                 self.find(mac, include_deleted=True) if mac else None
@@ -958,7 +1014,7 @@ class Store:
                     target_rows = [
                         d for d in self._cache['devices']
                         if not d.get('deleted') and d is not existing
-                        and d.get('ip') == target_ip
+                        and target_ip in device_ips(d)
                     ]
                     other_strong = [
                         d for d in target_rows if (d.get('mac') or '').strip()
@@ -977,7 +1033,18 @@ class Store:
                                     'assumiu IP de registro provisório sem MAC')
                         existing['ip'] = original_ip
 
-                existing['ip'] = target_ip
+                mac_is_secondary = (
+                    bool(mac)
+                    and mac in device_macs(existing)
+                    and mac != str(existing.get('mac') or '').lower()
+                )
+                known_alias = target_ip in device_ips(existing)
+                if mac_is_secondary or known_alias:
+                    add_device_ip(existing, target_ip, primary=False)
+                else:
+                    add_device_ip(existing, target_ip, primary=True)
+                if mac:
+                    add_device_mac(existing, mac, primary=False)
                 existing['vendor'] = info['vendor'] or existing.get('vendor', '')
                 existing['status'] = 'online'
                 existing['last_seen'] = now
@@ -1105,9 +1172,9 @@ class Store:
             for d in self._cache['devices']:
                 if d.get('deleted'):
                     continue
-                keys = {(d.get('mac') or '').lower(),
-                        (d.get('uid') or '').lower(),
-                        'ip:' + str(d.get('ip') or '')}
+                keys = {(d.get('uid') or '').lower()}
+                keys.update(device_macs(d))
+                keys.update('ip:' + ip for ip in device_ips(d))
                 seen = any(k and k in found for k in keys)
                 if seen or (d.get('has_agent') and d.get('agent_status') == 'active'):
                     d['status'] = 'online'

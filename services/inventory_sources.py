@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json, logging, os, re, shutil, subprocess
+from datetime import datetime
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -623,6 +624,8 @@ def sync_configured_sources(app, only=None, enabled_overrides=None):
     summary={}
     selected=set(only or [])
     overrides=enabled_overrides
+    successful_wazuh_sources=[]
+    wazuh_cycle_started={}
     if overrides is None:
         try:
             from services.source_scheduler import enabled_overrides as _schedule_enabled
@@ -637,6 +640,8 @@ def sync_configured_sources(app, only=None, enabled_overrides=None):
         enabled=False
         try:
             enabled=bool(overrides[src.name]) if src.name in overrides else src.enabled()
+            if src.name in ('wazuh', 'wazuh_indexer'):
+                wazuh_cycle_started[src.name]=datetime.utcnow()
             if not enabled:
                 record_source_state(src.name,enabled=False,status='disabled',success=False)
                 summary[src.name]={'skipped':True}
@@ -645,6 +650,8 @@ def sync_configured_sources(app, only=None, enabled_overrides=None):
             payload={'observed':result.observed,'errors':result.errors,'skipped':result.skipped,'detail':result.detail or {}}
             summary[src.name]=payload
             record_source_state(src.name,enabled=True,status='ok' if not result.errors else 'partial',metadata=payload,success=True)
+            if src.name in ('wazuh', 'wazuh_indexer') and not result.errors:
+                successful_wazuh_sources.append(src.name)
         except Exception as exc:
             try:
                 record_source_state(src.name,enabled=enabled,status='error',error=str(exc),success=False)
@@ -652,6 +659,21 @@ def sync_configured_sources(app, only=None, enabled_overrides=None):
                 pass
             app.logger.exception('[Source:%s] %s',src.name,exc)
             summary[src.name]={'error':str(exc)}
+    if successful_wazuh_sources:
+        try:
+            from services.netscope_wazuh_bridge import sync_from_inventory
+            since=min(wazuh_cycle_started[name] for name in successful_wazuh_sources)
+            bridge=sync_from_inventory(
+                app,
+                sources=tuple(successful_wazuh_sources),
+                observed_since=since,
+            )
+            summary['netscope_wazuh_bridge']=bridge
+            sync_netscope_assets()
+        except Exception as exc:
+            app.logger.exception('[NetScope] falha na ponte Wazuh pós-coleta: %s', exc)
+            summary['netscope_wazuh_bridge']={'error':str(exc)}
+
     try:
         from utils import cache as shared_cache
         shared_cache.invalidate('machines', 'stats')

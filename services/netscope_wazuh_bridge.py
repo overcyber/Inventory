@@ -2,13 +2,19 @@
 import hashlib
 from datetime import datetime
 
-from services.netscope_core import (store, load_config, save_config, guess_vendor, infer_type, mac_from_agent, dev_key, AGENT_FIELDS, _plausible_hostname, _implausible)
+from services.netscope_core import (
+    store, load_config, save_config, guess_vendor, infer_type, mac_from_agent,
+    dev_key, device_ips, device_macs, add_device_ip, add_device_mac,
+    AGENT_FIELDS, _plausible_hostname, _implausible,
+)
 
-def _query_hosts():
+def _query_hosts(sources=None, observed_since=None):
     from models import AssetSourceState
-    return (AssetSourceState.query
-            .filter(AssetSourceState.source.in_(('wazuh','wazuh_indexer')))
-            .order_by(AssetSourceState.last_seen.desc()).all())
+    selected = tuple(sources or ('wazuh', 'wazuh_indexer'))
+    query = AssetSourceState.query.filter(AssetSourceState.source.in_(selected))
+    if observed_since is not None:
+        query = query.filter(AssetSourceState.observed_at >= observed_since)
+    return query.order_by(AssetSourceState.last_seen.desc()).all()
 
 def _norm_host(name):
     return (name or '').strip().upper().split('.')[0]
@@ -42,9 +48,13 @@ def _extract_host_info(host):
         'agent_name':raw_agent.get('name') or hostname,
         'agent_status':state.get('agent_status') or state.get('agent_status_raw') or raw_agent.get('status') or 'unknown',
         'agent_ip':ip,
+        'ips':ips,
         'last_keepalive':str(state.get('last_seen') or ''),
         'groups':state.get('groups') or [],
-        'macs':macs,'hostname':hostname,'os':str(os_name).strip(),'os_platform':os_platform,
+        'macs':macs,
+        'interfaces':inv.get('netiface') or [],
+        'addresses':inv.get('netaddr') or [],
+        'hostname':hostname,'os':str(os_name).strip(),'os_platform':os_platform,
     }
 
 def _apply_agent_fields(dev, info, fill_doc=True):
@@ -56,6 +66,14 @@ def _apply_agent_fields(dev, info, fill_doc=True):
     dev['agent_last_keepalive'] = info['last_keepalive']
     dev['agent_groups'] = info['groups']
     dev['agent_ip'] = info['agent_ip']
+    for ip in info.get('ips') or []:
+        add_device_ip(dev, ip, primary=False)
+    for mac in info.get('macs') or []:
+        add_device_mac(dev, mac, primary=False)
+    if info.get('interfaces'):
+        dev['interfaces'] = info['interfaces']
+    if info.get('addresses'):
+        dev['addresses'] = info['addresses']
 
     if info['agent_status'] == 'active':
         dev['status'] = 'online'
@@ -133,6 +151,44 @@ def _dup(a, b):
 
 def _merge_pair(keep, dup, reason=''):
 
+    for ip in device_ips(dup):
+        add_device_ip(keep, ip, primary=False)
+    for mac in device_macs(dup):
+        add_device_mac(keep, mac, primary=False)
+
+    if dup.get('interfaces'):
+        merged_interfaces = list(keep.get('interfaces') or [])
+        seen_if = {
+            (str(x.get('name') or ''), str(x.get('mac') or '').lower())
+            for x in merged_interfaces if isinstance(x, dict)
+        }
+        for iface in dup.get('interfaces') or []:
+            if not isinstance(iface, dict):
+                continue
+            key = (str(iface.get('name') or ''),
+                   str(iface.get('mac') or '').lower())
+            if key not in seen_if:
+                merged_interfaces.append(iface)
+                seen_if.add(key)
+        keep['interfaces'] = merged_interfaces
+
+    if dup.get('addresses'):
+        merged_addresses = list(keep.get('addresses') or [])
+        seen_addr = {
+            (str(x.get('iface') or x.get('name') or ''),
+             str(x.get('address') or x.get('ip') or ''))
+            for x in merged_addresses if isinstance(x, dict)
+        }
+        for addr in dup.get('addresses') or []:
+            if not isinstance(addr, dict):
+                continue
+            key = (str(addr.get('iface') or addr.get('name') or ''),
+                   str(addr.get('address') or addr.get('ip') or ''))
+            if key not in seen_addr:
+                merged_addresses.append(addr)
+                seen_addr.add(key)
+        keep['addresses'] = merged_addresses
+
     FILL = ('hostname', 'dns_name', 'ip', 'vendor', 'type', 'user', 'department',
             'location', 'asset_tag', 'model', 'serial_number', 'os', 'seal_number',
             'subnet', 'notes')
@@ -192,6 +248,29 @@ def _remap_parents(removed_key, survivor_key):
     for d in store._cache['devices']:
         if (d.get('parent_id') or '').lower() == removed_key.lower():
             d['parent_id'] = survivor_key
+
+def merge_verified_agent_devices_locked():
+    """Merge duplicate NetScope rows proven to be the same Wazuh agent."""
+    buckets = {}
+    for dev in [d for d in store._cache['devices'] if not d.get('deleted')]:
+        agent_id = str(dev.get('agent_id') or '').strip()
+        if agent_id:
+            buckets.setdefault(agent_id, []).append(dev)
+
+    merged = 0
+    for agent_id, devices in buckets.items():
+        if len(devices) < 2:
+            continue
+        devices.sort(key=_survivor_rank)
+        keep = devices[0]
+        for dup in devices[1:]:
+            if dup.get('deleted'):
+                continue
+            dup_key = _merge_pair(keep, dup, 'agent-id')
+            _remap_parents(dup_key, dev_key(keep))
+            merged += 1
+    return merged
+
 
 def dedup_devices():
 
@@ -278,14 +357,14 @@ def duplicate_marks():
         pass
     return marks
 
-def sync_from_inventory(app, logger=None):
+def sync_from_inventory(app, logger=None, sources=None, observed_since=None):
 
     log = logger or app.logger
     stats = {'hosts': 0, 'created': 0, 'updated': 0, 'matched': 0,
              'without_agent': 0, 'merged': 0}
 
     try:
-        hosts = _query_hosts()
+        hosts = _query_hosts(sources=sources, observed_since=observed_since)
     except Exception as e:
         log.error(f"[NetScope] Falha ao consultar host_inventory: {e}")
         return stats
@@ -303,8 +382,9 @@ def sync_from_inventory(app, logger=None):
         for i, info in enumerate(infos):
             for mac in info['macs']:
                 mac_map[mac] = i
-            if info['agent_ip']:
-                ip_map[info['agent_ip']] = i
+            for ip in info.get('ips') or ([info['agent_ip']] if info['agent_ip'] else []):
+                if ip:
+                    ip_map[ip] = i
             if info['hostname']:
                 name_map[_norm_host(info['hostname'])] = i
 
@@ -312,10 +392,15 @@ def sync_from_inventory(app, logger=None):
 
         for dev in store.active():
             idx = None
-            if dev.get('mac') and dev['mac'] in mac_map:
-                idx = mac_map[dev['mac']]
-            if idx is None and dev.get('ip') and dev['ip'] in ip_map:
-                idx = ip_map[dev['ip']]
+            for mac in device_macs(dev):
+                if mac in mac_map:
+                    idx = mac_map[mac]
+                    break
+            if idx is None:
+                for ip in device_ips(dev):
+                    if ip in ip_map:
+                        idx = ip_map[ip]
+                        break
             if idx is None and dev.get('hostname'):
                 n = _norm_host(dev['hostname'])
                 if n and n in name_map:
@@ -371,7 +456,8 @@ def sync_from_inventory(app, logger=None):
             store._cache['devices'].append(dev)
             stats['created'] += 1
 
-        stats['merged'] = dedup_devices()
+        stats['merged'] = merge_verified_agent_devices_locked()
+        stats['merged'] += dedup_devices()
 
         store._flush()
 

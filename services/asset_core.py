@@ -93,8 +93,18 @@ def wazuh_payload_to_state(hostname: str, payload: dict, external_id: str = '') 
 
 
 def netscope_device_to_state(device: dict) -> dict:
-    mac = normalize_mac(device.get('mac') or device.get('uid'))
+    primary_mac = normalize_mac(device.get('mac') or device.get('uid'))
+    macs=[]
+    for raw in [primary_mac] + list(device.get('macs') or []):
+        mac=normalize_mac(raw)
+        if mac and mac not in macs:
+            macs.append(mac)
     ip = _text(device.get('ip'))
+    ips=[]
+    for raw in [ip] + list(device.get('ips') or []):
+        value=_text(raw)
+        if value and value not in ips:
+            ips.append(value)
     host = normalize_hostname(device.get('hostname') or device.get('dns_name'))
     online = _text(device.get('status')).lower() == 'online'
     ports = []
@@ -109,14 +119,14 @@ def netscope_device_to_state(device: dict) -> dict:
                       'state': item.get('state') or 'open', 'protocol': 'udp'})
     return {
         'hostname': host,
-        'ip_address': ip,
-        'ips': [ip] if ip else [],
-        'macs': [mac] if mac else [],
+        'ip_address': ip or _first(ips, ''),
+        'ips': ips,
+        'macs': macs,
         'network_status': 'reachable' if online else 'unreachable',
         'device_status': 'Ativo' if online else 'Inativo',
         'last_seen': device.get('last_seen'),
         'source': ['netscope'],
-        'confidence': 0.80 if mac else 0.60,
+        'confidence': 0.80 if macs else 0.60,
         'vendor': device.get('vendor') or '',
         'device_type': device.get('type') or '',
         'switch_port': device.get('switch_port') or '',
@@ -124,10 +134,15 @@ def netscope_device_to_state(device: dict) -> dict:
         'ports': ports,
         'inventory': {
             'ports': ports,
-            'netiface': ([{'name': '', 'mac': mac, 'state': 'up' if online else 'down',
-                           'mtu': '', 'type': ''}] if mac else []),
-            'netaddr': ([{'iface': '', 'address': ip, 'netmask': '',
-                          'proto': 'ipv4', 'broadcast': ''}] if ip else []),
+            'netiface': (device.get('interfaces') or [
+                {'name': '', 'mac': mac, 'state': 'up' if online else 'down',
+                 'mtu': '', 'type': ''} for mac in macs
+            ]),
+            'netaddr': (device.get('addresses') or [
+                {'iface': '', 'address': addr, 'netmask': '',
+                 'proto': 'ipv6' if ':' in addr else 'ipv4', 'broadcast': ''}
+                for addr in ips
+            ]),
         },
     }
 
@@ -692,6 +707,8 @@ def asset_to_machine(asset) -> dict:
         'asset_uuid': asset.asset_uuid,
         'hostname': s.get('hostname') or asset.canonical_name or 'N/A',
         'ip_address': s.get('ip_address') or _first(s.get('ips') or [], 'N/A'),
+        'ips': list(s.get('ips') or []),
+        'macs': list(s.get('macs') or []),
         'device_status': s.get('device_status') or asset.status or 'Desconhecido',
         'agent_status_raw': s.get('agent_status_raw') or s.get('agent_status') or asset.agent_status or 'unknown',
         'network_status': s.get('network_status') or asset.network_status or 'unknown',
