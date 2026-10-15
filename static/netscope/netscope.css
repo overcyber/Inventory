@@ -2668,3 +2668,39 @@ html[dir="rtl"] #ns-root .ip-conflict-tag {
     opacity: 1;
     stroke: var(--primary);
 }
+
+
+/* NetScope topology mode / evidence status */
+#ns-root .topology-mode-box {
+    margin-bottom: 7px;
+    padding: 7px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--card-bg) 92%, transparent);
+}
+#ns-root .topology-mode-select {
+    width: 100%;
+    min-height: 32px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    color: var(--text);
+    padding: 4px 7px;
+    font-size: .75rem;
+}
+#ns-root .topology-mode-status {
+    margin-top: 5px;
+    color: var(--gray);
+    font-size: .66rem;
+    line-height: 1.35;
+}
+#ns-root .link.inferred.link-passive {
+    stroke-dasharray: 4 4;
+    opacity: .78;
+    stroke-width: 1.8;
+}
+#ns-root .link.inferred.link-advanced {
+    stroke-dasharray: 9 2;
+    opacity: .92;
+    stroke-width: 2.2;
+}

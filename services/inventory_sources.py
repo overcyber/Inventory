@@ -3,6 +3,7 @@ import json, logging, os, re, shutil, subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+from collections import defaultdict
 from services.asset_core import generic_payload_to_state, ingest_observation, record_source_state, sync_netscope_assets
 
 log=logging.getLogger('inventory.sources')
@@ -112,11 +113,20 @@ def _snmp_auth(target):
 
 class SNMPSource(InventorySource):
     name='snmp'
-    OIDS={'sys_name':'1.3.6.1.2.1.1.5.0','sys_descr':'1.3.6.1.2.1.1.1.0','sys_location':'1.3.6.1.2.1.1.6.0',
+    OIDS={
+          'sys_name':'1.3.6.1.2.1.1.5.0','sys_descr':'1.3.6.1.2.1.1.1.0','sys_location':'1.3.6.1.2.1.1.6.0',
           'if_descr':'1.3.6.1.2.1.2.2.1.2','if_phys':'1.3.6.1.2.1.2.2.1.6','if_status':'1.3.6.1.2.1.2.2.1.8',
-          'dot1q_pvid':'1.3.6.1.2.1.17.7.1.4.5.1.1','fdb_address':'1.3.6.1.2.1.17.4.3.1.1',
-          'fdb_port':'1.3.6.1.2.1.17.4.3.1.2',
-          'bridge_ifindex':'1.3.6.1.2.1.17.1.4.1.2'}
+          'dot1q_pvid':'1.3.6.1.2.1.17.7.1.4.5.1.1',
+          'fdb_address':'1.3.6.1.2.1.17.4.3.1.1','fdb_port':'1.3.6.1.2.1.17.4.3.1.2',
+          'dot1q_fdb_port':'1.3.6.1.2.1.17.7.1.2.2.1.2',
+          'bridge_ifindex':'1.3.6.1.2.1.17.1.4.1.2',
+          'lldp_loc_port_id':'1.0.8802.1.1.2.1.3.7.1.3',
+          'lldp_rem_chassis':'1.0.8802.1.1.2.1.4.1.1.5',
+          'lldp_rem_port':'1.0.8802.1.1.2.1.4.1.1.7',
+          'lldp_rem_sysname':'1.0.8802.1.1.2.1.4.1.1.9',
+          'cdp_device_id':'1.3.6.1.4.1.9.9.23.1.2.1.1.6',
+          'cdp_device_port':'1.3.6.1.4.1.9.9.23.1.2.1.1.7'
+    }
     def enabled(self): return env_bool('SNMP_ENABLED',False)
     def _walk(self,target,oid):
         binary=os.getenv('SNMPWALK_BINARY','snmpwalk')
@@ -138,51 +148,226 @@ class SNMPSource(InventorySource):
         if len(compact)!=12:
             return ''
         return ':'.join(compact[i:i+2] for i in range(0,12,2)).lower()
+    @staticmethod
+    def _suffix(oid, base):
+        marker=str(base).rstrip('.')+'.'
+        return str(oid).split(marker,1)[-1] if marker in str(oid) else ''
+
+    @staticmethod
+    def _int_value(value):
+        m=re.search(r'-?\d+',str(value or ''))
+        return int(m.group(0)) if m else None
+
+    @staticmethod
+    def _mac_from_oid_suffix(oid, base):
+        suffix=SNMPSource._suffix(oid,base)
+        nums=[]
+        for part in suffix.split('.'):
+            try: nums.append(int(part))
+            except ValueError: pass
+        if len(nums)<6: return '', ''
+        macnums=nums[-6:]
+        if any(x<0 or x>255 for x in macnums): return '', ''
+        mac=':'.join(f'{x:02x}' for x in macnums)
+        vlan=str(nums[-7]) if len(nums)>=7 else ''
+        return mac,vlan
+
+    @staticmethod
+    def _find_peer(store, mac='', hostname=''):
+        if mac:
+            dev=store.find(mac,include_deleted=False)
+            if dev: return dev
+        target=str(hostname or '').strip().lower()
+        if target:
+            for dev in store.active():
+                names=(dev.get('hostname'),dev.get('dns_name'),dev.get('name'))
+                if any(str(n or '').strip().lower()==target for n in names):
+                    return dev
+        return None
+
     def _enrich_netscope(self,host,raw,indexes=None):
+        """Write SNMP topology as evidence; never mutate switch_port directly."""
         try:
-            from services.netscope_core import store, dev_key
+            from models import db
+            from services.netscope_core import store, dev_key, load_config
+            from services.netscope_topology_evidence import record_evidence
+            cfg=load_config()
+            topo=cfg.get('topology') or {}
+            if str(topo.get('mode') or 'basic').lower()!='advanced':
+                return {'skipped':True,'reason':'topology-basic'}
+            adv=topo.get('advanced') or {}
             switch=store.find_by_ip(host,include_deleted=False)
             if not switch:
-                return 0
+                return {'skipped':True,'reason':'switch-not-in-netscope'}
             switch_key=dev_key(switch)
-            fdb_ports=raw.get('fdb_port') or {}
-            ifindexes=raw.get('bridge_ifindex') or {}
+            ttl=int(topo.get('evidence_ttl_seconds',1800) or 1800)
+            indexes=indexes or {}
+            bridge_to_if={}
+            for oid,value in (raw.get('bridge_ifindex') or {}).items():
+                bridge=self._int_value(oid.rsplit('.',1)[-1])
+                ifidx=self._int_value(value)
+                if bridge is not None and ifidx is not None:
+                    bridge_to_if[bridge]=ifidx
             pvids=raw.get('dot1q_pvid') or {}
-            changed=0
-            for oid,value in (raw.get('fdb_address') or {}).items():
-                mac=self._mac_value(value)
-                if not mac:
-                    continue
-                suffix=oid.split('1.3.6.1.2.1.17.4.3.1.1.',1)[-1]
-                port_raw=next((v for k,v in fdb_ports.items() if k.endswith('.'+suffix)),None)
-                try: bridge_port=int(re.sub(r'[^0-9]','',str(port_raw or '')))
-                except ValueError: continue
-                ifidx_raw=next((v for k,v in ifindexes.items() if k.endswith('.'+str(bridge_port))),None)
-                try: ifidx=int(re.sub(r'[^0-9]','',str(ifidx_raw or bridge_port)))
-                except ValueError: ifidx=bridge_port
-                iface=(indexes or {}).get(str(ifidx),{})
-                pvid_raw=next((v for k,v in pvids.items() if k.endswith('.'+str(bridge_port))), '')
+
+            def port_info(bridge_port):
+                ifidx=bridge_to_if.get(int(bridge_port),int(bridge_port))
+                iface=indexes.get(str(ifidx),{})
+                label=str(iface.get('name') or f'port-{bridge_port}')
+                pvid_raw=next((v for k,v in pvids.items()
+                               if k.endswith('.'+str(bridge_port))), '')
                 vlan=re.sub(r'[^0-9]','',str(pvid_raw or ''))
-                dev=store.find(mac,include_deleted=False)
-                if not dev or dev is switch:
-                    continue
-                dev['switch_port']={'switch_mac':switch_key,'port':bridge_port,
-                                    'label':iface.get('name') or f'port-{bridge_port}',
-                                    'vlan':vlan,'speed':'','duplex':''}
-                changed+=1
-            if changed:
-                with store._lock:
-                    store._flush()
-            return changed
+                return label,vlan,ifidx
+
+            uplink_labels=set()
+            counts={'lldp':0,'cdp':0,'fdb':0,'fdb_candidates':0}
+
+            if adv.get('lldp',True):
+                chassis_base=self.OIDS['lldp_rem_chassis']
+                ports=raw.get('lldp_rem_port') or {}
+                names=raw.get('lldp_rem_sysname') or {}
+                locports=raw.get('lldp_loc_port_id') or {}
+                for oid,value in (raw.get('lldp_rem_chassis') or {}).items():
+                    suffix=self._suffix(oid,chassis_base)
+                    idx=suffix.split('.')
+                    if len(idx)<3: continue
+                    local_num=idx[-2]
+                    local_label=next((v for k,v in locports.items()
+                                      if k.endswith('.'+local_num)),local_num)
+                    remote_port=next((v for k,v in ports.items()
+                                      if self._suffix(k,self.OIDS['lldp_rem_port'])==suffix),'')
+                    remote_name=next((v for k,v in names.items()
+                                      if self._suffix(k,self.OIDS['lldp_rem_sysname'])==suffix),'')
+                    remote_mac=self._mac_value(value)
+                    peer=self._find_peer(store,remote_mac,remote_name)
+                    uplink_labels.add(str(local_label))
+                    record_evidence(
+                        source='lldp',relation='physical-neighbor',observer=switch_key,
+                        subject_key=switch_key,peer_key=dev_key(peer) if peer else '',
+                        subject_ip=switch.get('ip') or '',
+                        peer_ip=(peer.get('ip') or '') if peer else '',
+                        local_port=str(local_label),remote_port=str(remote_port),
+                        confidence=0.99,ttl_seconds=ttl,
+                        details={'remote_chassis':str(value),'remote_mac':remote_mac,
+                                 'remote_name':str(remote_name)},commit=False)
+                    counts['lldp']+=1
+
+            if adv.get('cdp',True):
+                device_base=self.OIDS['cdp_device_id']
+                remote_ports=raw.get('cdp_device_port') or {}
+                for oid,value in (raw.get('cdp_device_id') or {}).items():
+                    suffix=self._suffix(oid,device_base)
+                    idx=suffix.split('.')
+                    if len(idx)<2: continue
+                    ifidx=idx[-2]
+                    local_label=str((indexes.get(str(ifidx)) or {}).get('name') or ifidx)
+                    remote_port=next((v for k,v in remote_ports.items()
+                                      if self._suffix(k,self.OIDS['cdp_device_port'])==suffix),'')
+                    peer=self._find_peer(store,hostname=str(value))
+                    uplink_labels.add(local_label)
+                    record_evidence(
+                        source='cdp',relation='physical-neighbor',observer=switch_key,
+                        subject_key=switch_key,peer_key=dev_key(peer) if peer else '',
+                        subject_ip=switch.get('ip') or '',
+                        peer_ip=(peer.get('ip') or '') if peer else '',
+                        local_port=local_label,remote_port=str(remote_port),
+                        confidence=0.98,ttl_seconds=ttl,
+                        details={'remote_name':str(value)},commit=False)
+                    counts['cdp']+=1
+
+            learned=defaultdict(set)
+            if adv.get('fdb',True):
+                fdb_ports=raw.get('fdb_port') or {}
+                for oid,value in (raw.get('fdb_address') or {}).items():
+                    mac=self._mac_value(value)
+                    if not mac: continue
+                    suffix=self._suffix(oid,self.OIDS['fdb_address'])
+                    port_raw=next((v for k,v in fdb_ports.items()
+                                   if self._suffix(k,self.OIDS['fdb_port'])==suffix),None)
+                    bridge_port=self._int_value(port_raw)
+                    if bridge_port is None: continue
+                    label,vlan,_=port_info(bridge_port)
+                    dev=store.find(mac,include_deleted=False)
+                    learned[label].add(mac)
+                    record_evidence(
+                        source='snmp-fdb',relation='fdb-learned',observer=switch_key,
+                        subject_key=dev_key(dev) if dev else '',peer_key=switch_key,
+                        subject_ip=(dev.get('ip') or '') if dev else '',
+                        peer_ip=switch.get('ip') or '',local_port=label,vlan=vlan,
+                        confidence=0.62,ttl_seconds=ttl,
+                        details={'mac':mac,'bridge_port':bridge_port},commit=False)
+                    counts['fdb']+=1
+
+                dot1q_base=self.OIDS['dot1q_fdb_port']
+                for oid,value in (raw.get('dot1q_fdb_port') or {}).items():
+                    mac,vlan=self._mac_from_oid_suffix(oid,dot1q_base)
+                    bridge_port=self._int_value(value)
+                    if not mac or bridge_port is None: continue
+                    label,pvid,_=port_info(bridge_port)
+                    vlan=vlan or pvid
+                    dev=store.find(mac,include_deleted=False)
+                    learned[label].add(mac)
+                    record_evidence(
+                        source='snmp-fdb',relation='fdb-learned',observer=switch_key,
+                        subject_key=dev_key(dev) if dev else '',peer_key=switch_key,
+                        subject_ip=(dev.get('ip') or '') if dev else '',
+                        peer_ip=switch.get('ip') or '',local_port=label,vlan=vlan,
+                        confidence=0.66,ttl_seconds=ttl,
+                        details={'mac':mac,'bridge_port':bridge_port,
+                                 'qbridge':True},commit=False)
+                    counts['fdb']+=1
+
+                # Only a single known endpoint on a non-uplink port is promoted
+                # to a candidate. FDB alone remains lower confidence than LLDP.
+                for label,macs in learned.items():
+                    if label in uplink_labels or len(macs)!=1:
+                        continue
+                    mac=next(iter(macs))
+                    dev=store.find(mac,include_deleted=False)
+                    if not dev: continue
+                    record_evidence(
+                        source='snmp-fdb',relation='fdb-access-candidate',
+                        observer=switch_key,subject_key=dev_key(dev),peer_key=switch_key,
+                        subject_ip=dev.get('ip') or '',peer_ip=switch.get('ip') or '',
+                        local_port=label,confidence=0.82,ttl_seconds=ttl,
+                        details={'mac':mac,'reason':'single-mac-non-uplink'},
+                        commit=False)
+                    counts['fdb_candidates']+=1
+            db.session.commit()
+            return counts
         except Exception:
-            return 0
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            return {'error':1}
+
     def collect(self,app):
         observed=errors=0
         for target in _json_env('SNMP_TARGETS_JSON',[]):
             host=str(target.get('host') or '').strip()
             if not host: continue
             try:
-                target={**target,'host':host}; raw={k:self._walk(target,oid) for k,oid in self.OIDS.items()}
+                target={**target,'host':host}
+                from services.netscope_core import load_config
+                topo_mode=str((load_config().get('topology') or {}).get('mode') or 'basic').lower()
+                topology_oids={
+                    'dot1q_pvid','fdb_address','fdb_port','dot1q_fdb_port',
+                    'bridge_ifindex','lldp_loc_port_id','lldp_rem_chassis',
+                    'lldp_rem_port','lldp_rem_sysname','cdp_device_id','cdp_device_port'
+                }
+                raw={}
+                for key,oid in self.OIDS.items():
+                    if key in topology_oids and topo_mode!='advanced':
+                        raw[key]={}
+                        continue
+                    try:
+                        raw[key]=self._walk(target,oid)
+                    except Exception:
+                        if key in topology_oids:
+                            raw[key]={}
+                        else:
+                            raise
                 idxs={}
                 for key,field in (('if_descr','name'),('if_phys','mac'),('if_status','state'),('dot1q_pvid','vlan')):
                     for oid,val in raw[key].items(): idxs.setdefault(oid.rsplit('.',1)[-1],{})[field]=val

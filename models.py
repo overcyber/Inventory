@@ -106,6 +106,65 @@ class NetscopeScanHistory(db.Model):
     results = db.Column(JSONB, nullable=False)
 
 
+class NetscopeTopologyEvidence(db.Model):
+    __tablename__ = 'netscope_topology_evidence'
+    id = db.Column(db.BigInteger, primary_key=True)
+    evidence_key = db.Column(db.String(192), unique=True, nullable=False, index=True)
+    source = db.Column(db.String(32), nullable=False, index=True)
+    relation = db.Column(db.String(48), nullable=False, index=True)
+    observer = db.Column(db.String(128), default='', index=True)
+    subject_key = db.Column(db.String(128), default='', index=True)
+    peer_key = db.Column(db.String(128), default='', index=True)
+    subject_ip = db.Column(db.String(64), default='', index=True)
+    peer_ip = db.Column(db.String(64), default='', index=True)
+    local_port = db.Column(db.String(128), default='')
+    remote_port = db.Column(db.String(128), default='')
+    vlan = db.Column(db.String(32), default='')
+    confidence = db.Column(db.Float, nullable=False, default=0.5)
+    first_seen = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    last_seen = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    expires_at = db.Column(db.DateTime, nullable=True, index=True)
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    details = db.Column(JSONB, nullable=False, default=dict)
+
+
+class NetscopeFlowAggregate(db.Model):
+    __tablename__ = 'netscope_flow_aggregates'
+    id = db.Column(db.BigInteger, primary_key=True)
+    flow_key = db.Column(db.String(192), unique=True, nullable=False, index=True)
+    sensor_id = db.Column(db.String(128), nullable=False, default='netscope-local', index=True)
+    interface = db.Column(db.String(128), nullable=False, default='')
+    src_ip = db.Column(db.String(64), nullable=False, index=True)
+    dst_ip = db.Column(db.String(64), nullable=False, index=True)
+    src_mac = db.Column(db.String(20), default='', index=True)
+    dst_mac = db.Column(db.String(20), default='', index=True)
+    src_port = db.Column(db.Integer, default=0)
+    dst_port = db.Column(db.Integer, default=0)
+    protocol = db.Column(db.String(12), nullable=False, default='IP', index=True)
+    vlan = db.Column(db.String(32), default='')
+    packets = db.Column(db.BigInteger, nullable=False, default=0)
+    bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    flow_count = db.Column(db.BigInteger, nullable=False, default=0)
+    first_seen = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    last_seen = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class NetscopeIdentityObservation(db.Model):
+    __tablename__ = 'netscope_identity_observations'
+    id = db.Column(db.BigInteger, primary_key=True)
+    observation_key = db.Column(db.String(192), unique=True, nullable=False, index=True)
+    ip = db.Column(db.String(64), nullable=False, index=True)
+    mac = db.Column(db.String(20), default='', index=True)
+    hostname = db.Column(db.String(255), default='')
+    source = db.Column(db.String(32), nullable=False, index=True)
+    sensor_id = db.Column(db.String(128), nullable=False, default='netscope-local')
+    confidence = db.Column(db.Float, nullable=False, default=0.5)
+    first_seen = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    last_seen = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+    valid_to = db.Column(db.DateTime, nullable=True)
+    details = db.Column(JSONB, nullable=False, default=dict)
+
+
 # ---------------------------------------------------------------------------
 # Asset Core v0.19 — canonical multi-source asset model.
 # HostInventory remains for backward compatibility during migration.

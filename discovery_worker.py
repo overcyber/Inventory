@@ -10,14 +10,26 @@ from core.app import create_app
 from services.netscope_core import load_config
 from services.netscope_engine import run_scan, local_scan_result
 from services.netscope_scan_control import claim_scan, begin_scan, finish_scan
+from services.netscope_passive import start_passive_collector
+from services.netscope_topology_evidence import expire_stale
 
 app = create_app()
+passive = start_passive_collector(app)
 interval = max(300, int(os.getenv('NETSCOPE_DISCOVERY_INTERVAL', '900')))
 next_automatic = time.monotonic()
+next_cleanup = time.monotonic()
 
 while True:
     with app.app_context():
         try:
+            if time.monotonic() >= next_cleanup:
+                cfg_cleanup = load_config()
+                topo_cleanup = cfg_cleanup.get('topology') or {}
+                expire_stale(
+                    flow_retention_hours=topo_cleanup.get('flow_retention_hours', 24),
+                    identity_retention_days=topo_cleanup.get('identity_retention_days', 30),
+                )
+                next_cleanup = time.monotonic() + 60
             job = claim_scan()
             if job:
                 try:

@@ -339,6 +339,26 @@ DEFAULT_CONFIG = {
     "port_scan": {"profile": "standard", "udp_profile": "quick",
                   "workers": 256, "tcp_timeout": 0.3,
                   "udp_timeout": 0.5, "banner": True},
+    "topology": {
+        "mode": "basic",
+        "passive_enabled": True,
+        "passive_interface": "",
+        "passive_local_networks": [],
+        "promiscuous": False,
+        "sensor_id": "",
+        "flow_window_seconds": 300,
+        "flow_analysis_minutes": 30,
+        "flush_seconds": 15,
+        "max_flow_keys": 5000,
+        "evidence_ttl_seconds": 1800,
+        "flow_retention_hours": 24,
+        "identity_retention_days": 30,
+        "advanced": {
+            "lldp": True,
+            "cdp": True,
+            "fdb": True
+        }
+    },
     "switches": {}
 }
 
@@ -1033,27 +1053,53 @@ class Store:
             return True, 200
 
     def infer_links(self, cfg, details=False, dry_run=False):
-        """Infer evidenced switch-port and logical gateway associations.
-
-        Never infer physical cabling from IP proximity. Preserve manually
-        created links, and replace only previously inferred relationships.
-        """
+        """Fuse manual, passive and (optionally) advanced topology evidence."""
         from services.netscope_topology import infer_topology
+        from services.netscope_topology_evidence import (
+            active_evidence, evidence_summary, infer_roles,
+        )
 
         with self._lock:
-            # A different worker may have updated inventory since our cache
-            # was loaded. Force a fresh snapshot before topology inference.
             self._cache_loaded_at = 0.0
             devices = self._load()['devices']
-            plan, summary = infer_topology(devices, cfg)
-            changed = 0
+            try:
+                evidence = active_evidence()
+                role_plan = infer_roles(
+                    devices,
+                    int((cfg.get('topology') or {}).get(
+                        'flow_analysis_minutes', 30) or 30),
+                )
+                evidence_meta = evidence_summary()
+            except (RuntimeError, LookupError):
+                # Keep the pure inference path usable in unit tests and
+                # maintenance commands without a Flask application context.
+                evidence = []
+                role_plan = {}
+                evidence_meta = {
+                    'active': 0, 'by_source': {}, 'by_relation': {},
+                    'flow_aggregates': 0, 'identity_observations': 0,
+                }
+            plan, summary = infer_topology(devices, cfg, evidence=evidence)
+            link_changed = 0
+            role_updates = 0
             cleared = 0
             for device in devices:
                 if device.get('deleted'):
                     continue
-                if device.get('parent_id') and not device.get('parent_inferred'):
-                    continue  # Manual links are authoritative.
                 identifier = dev_key(device)
+                role_value = role_plan.get(identifier)
+                if role_value is None and device.get('inferred_roles'):
+                    role_value = {
+                        'ip': device.get('ip') or '',
+                        'roles': [], 'metrics': {},
+                    }
+                if role_value is not None and                         (device.get('inferred_roles') or {}) != role_value:
+                    role_updates += 1
+                    if not dry_run:
+                        device['inferred_roles'] = role_value
+
+                if device.get('parent_id') and not device.get('parent_inferred'):
+                    continue
                 proposal = plan.get(identifier)
                 if proposal is None:
                     if device.get('parent_inferred'):
@@ -1063,18 +1109,25 @@ class Store:
                             device['parent_confidence'] = 0
                             device.pop('parent_relation', None)
                             device.pop('parent_evidence', None)
-                        changed += 1
+                        link_changed += 1
                         cleared += 1
                     continue
                 if any(device.get(field) != value
                        for field, value in proposal.items()):
                     if not dry_run:
                         device.update(proposal)
-                    changed += 1
-            if changed and not dry_run:
+                    link_changed += 1
+            total_changed = link_changed + role_updates
+            if total_changed and not dry_run:
                 self._flush()
-            summary.update({'changed': changed, 'cleared': cleared,
-                            'preview': bool(dry_run)})
-            return summary if details else changed
+            summary.update({
+                'changed': total_changed,
+                'link_changed': link_changed,
+                'role_updates': role_updates,
+                'cleared': cleared,
+                'preview': bool(dry_run),
+                'evidence': evidence_meta,
+            })
+            return summary if details else total_changed
 
 store = Store()

@@ -138,6 +138,7 @@ const S = {
 
   layoutMode: 'tree',
   switches: [],
+  topologyEvidence: [],
   snapshots: [],
   snapshotView: null,
   snapshotDevices: null,
@@ -451,8 +452,13 @@ function applyLayoutMode() {
 }
 
 async function loadDevices() {
-  const r = await api('/netscope/api/devices');
+  const [r, evidenceResult] = await Promise.all([
+    api('/netscope/api/devices'),
+    api('/netscope/api/topology/evidence?limit=500')
+  ]);
   if (r.error) return;
+  S.topologyEvidence = evidenceResult && !evidenceResult.error
+    ? (evidenceResult.evidence || []) : [];
   const newDevs = (r.devices || []).map(d => {
 
     d.id = d.uid || d.mac;
@@ -586,9 +592,51 @@ $('stat-dup-item').onclick = () => {
   renderList();
 };
 
+async function loadTopologyStatus() {
+  const el = $('topology-mode-status');
+  if (!el) return;
+  const r = await api('/netscope/api/topology/status');
+  if (r.error) { el.textContent = r.error; return; }
+  const p = r.passive || {};
+  const e = r.evidence || {};
+  const by = e.by_source || {};
+  const pieces = [
+    p.running ? ('Passivo ativo em ' + (p.interface || '?')) : 'Passivo aguardando',
+    (e.active || 0) + ' evidência(s)',
+  ];
+  if (r.mode === 'advanced') {
+    pieces.push('LLDP ' + (by.lldp || 0));
+    pieces.push('CDP ' + (by.cdp || 0));
+    pieces.push('FDB ' + (by['snmp-fdb'] || 0));
+  }
+  el.textContent = pieces.join(' · ');
+}
+
 async function loadConfig() {
   S.config = await api('/netscope/api/config');
+  const mode = ((S.config || {}).topology || {}).mode || 'basic';
+  const sel = $('topology-mode');
+  if (sel) sel.value = mode;
+  loadTopologyStatus();
 }
+
+if ($('topology-mode')) $('topology-mode').onchange = async e => {
+  const mode = e.target.value;
+  const r = await api('/netscope/api/topology/mode', {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({mode})
+  });
+  if (r.error) {
+    toast(t('Falha: {e}', {e:r.error}), 'err');
+    await loadConfig();
+    return;
+  }
+  S.config = {...(S.config || {}), topology:r.topology};
+  toast(mode === 'advanced'
+    ? 'Modo Avançado: Básico + SNMP/LLDP/CDP/FDB'
+    : 'Modo Básico: descoberta ativa + análise passiva local', 'ok');
+  await loadTopologyStatus();
+};
 
 async function loadSubnets() {
   const r = await api('/netscope/api/subnets');
@@ -761,6 +809,34 @@ function buildLinks() {
       vlan: sp ? sp.vlan : '',
     });
   });
+
+  // LLDP/CDP are true neighbor observations and may not fit the single-parent
+  // tree projection. Render them as physical overlay edges without changing
+  // manual or inferred parent_id.
+  const ids = new Set(S.devices.map(d => d.id));
+  const represented = new Set(links.map(l => {
+    const a = String(l.source), b = String(l.target);
+    return a < b ? a + '|' + b : b + '|' + a;
+  }));
+  (S.topologyEvidence || []).forEach(ev => {
+    if (ev.relation !== 'physical-neighbor') return;
+    const a = ev.subject_key, b = ev.peer_key;
+    if (!a || !b || a === b || !ids.has(a) || !ids.has(b)) return;
+    const pair = a < b ? a + '|' + b : b + '|' + a;
+    if (represented.has(pair)) return;
+    represented.add(pair);
+    links.push({
+      source: a, target: b,
+      key: 'evidence|' + pair,
+      pidx: 0, pcnt: 1, inferred: true,
+      confidence: Math.round(Number(ev.confidence || 0) * 100),
+      relation: 'physical-' + (ev.source || 'evidence'),
+      evidence: (ev.source || '') + ':' + (ev.local_port || '') +
+        (ev.remote_port ? '->' + ev.remote_port : ''),
+      port_label: [ev.local_port, ev.remote_port].filter(Boolean).join('↔'),
+      port_num: null, vlan: ev.vlan || '', overlay: true,
+    });
+  });
   return links;
 }
 
@@ -809,10 +885,14 @@ function updateGraph() {
     .join(
       enter => enter.append('path').attr('class', d => 'link link-el' + (d.inferred ? ' inferred' : '') +
         (d.relation === 'logical-gateway' ? ' link-logical-gateway' :
-         d.relation === 'physical-configured' ? ' link-switch-configured' : '')),
+         d.relation === 'physical-configured' ? ' link-switch-configured' :
+         d.relation === 'passive-next-hop' ? ' link-passive' :
+         String(d.relation || '').startsWith('physical-') ? ' link-advanced' : '')),
       update => update.attr('class', d => 'link link-el' + (d.inferred ? ' inferred' : '') +
         (d.relation === 'logical-gateway' ? ' link-logical-gateway' :
-         d.relation === 'physical-configured' ? ' link-switch-configured' : '')),
+         d.relation === 'physical-configured' ? ' link-switch-configured' :
+         d.relation === 'passive-next-hop' ? ' link-passive' :
+         String(d.relation || '').startsWith('physical-') ? ' link-advanced' : '')),
       exit => exit.remove()
     );
 
@@ -1104,9 +1184,17 @@ function showPopover(node) {
   const pCls = node.parent_inferred ? 'val inferred' : 'val';
   const parentType = node.parent_relation === 'logical-gateway'
     ? 'Associação lógica ao gateway configurado (não é conexão física)'
-    : node.parent_relation === 'physical-configured'
-      ? 'Porta de switch configurada (não verificada por LLDP)'
-      : node.parent_inferred ? 'Associação inferida' : 'Associação manual';
+    : node.parent_relation === 'passive-next-hop'
+      ? 'Próximo salto Ethernet observado pelo coletor passivo'
+      : node.parent_relation === 'physical-configured'
+        ? 'Porta de switch configurada manualmente'
+        : node.parent_relation === 'physical-lldp'
+          ? 'Vizinho físico observado por LLDP'
+          : node.parent_relation === 'physical-cdp'
+            ? 'Vizinho físico observado por CDP'
+            : node.parent_relation === 'physical-fdb-candidate'
+              ? 'Candidato de porta de acesso derivado da FDB'
+              : node.parent_inferred ? 'Associação inferida' : 'Associação manual';
   const sp = node.switch_port || null;
   const swName = sp ? (S.devices.find(d => d.id === sp.switch_mac)?.name || sp.switch_mac) : '';
   const agYes = !!node.has_agent;
@@ -1136,7 +1224,11 @@ function showPopover(node) {
       ? '<div class="pop-row"><span class="lbl"><i class="fas fa-tower-broadcast"></i> ' + t('Descoberta') + '</span><span class="val"><span class="arp-tag">ARP</span> ' + t('via ARP (não responde ping)') + '</span></div>'
       : '') +
     '<div class="pop-row"><span class="lbl">' + t('Pai') + '</span><span class="' + pCls + '">' + esc(parent) + '</span></div>' +
-    (node.parent_id ? '<div class="pop-row"><span class="lbl">Evidência</span><span class="val" title="' + esc(node.parent_evidence || '') + '">' + esc(parentType) + '</span></div>' : '');
+    (node.parent_id ? '<div class="pop-row"><span class="lbl">Evidência</span><span class="val" title="' + esc(node.parent_evidence || '') + '">' + esc(parentType) + '</span></div>' : '') +
+    ((node.inferred_roles && node.inferred_roles.roles || []).length
+      ? '<div class="pop-row"><span class="lbl">Papéis inferidos</span><span class="val">' +
+        (node.inferred_roles.roles || []).map(r => esc(r.role) + ' ' + Math.round((r.score || 0) * 100) + '%').join('<br>') +
+        '</span></div>' : '');
   if (agYes && node.agent_last_keepalive) {
     html += '<div class="pop-row"><span class="lbl">KeepAlive</span><span class="val">' + esc(fmtDate(node.agent_last_keepalive)) + '</span></div>';
   }
@@ -2163,16 +2255,15 @@ $('btn-infer').onclick = async () => {
       toast(t('Falha: {e}', {e: preview.error}), 'err');
       return;
     }
-    const summary = 'Portas de switch configuradas: ' +
-      (preview.physical_configured || 0) + '\n' +
-      'Associações lógicas aos gateways: ' +
-      (preview.logical_gateway || 0) + '\n' +
-      'Vínculos manuais preservados: ' +
-      (preview.manual_preserved || 0) + '\n' +
-      'Sem evidência suficiente: ' +
-      (preview.unresolved || 0) + '\n' +
-      'Vínculos inferidos antigos a remover: ' +
-      (preview.cleared || 0);
+    const summary = 'Modo: ' + (preview.mode || 'basic') + '\n' +
+      'Portas de switch configuradas: ' + (preview.physical_configured || 0) + '\n' +
+      'Próximos saltos observados passivamente: ' + (preview.passive_next_hop || 0) + '\n' +
+      'Ligações avançadas LLDP/CDP/FDB: ' + (preview.physical_advanced || 0) + '\n' +
+      'Associações lógicas aos gateways: ' + (preview.logical_gateway || 0) + '\n' +
+      'Papéis/centralidade a atualizar: ' + (preview.role_updates || 0) + '\n' +
+      'Vínculos manuais preservados: ' + (preview.manual_preserved || 0) + '\n' +
+      'Sem evidência suficiente: ' + (preview.unresolved || 0) + '\n' +
+      'Vínculos inferidos antigos a remover: ' + (preview.cleared || 0);
     if (!preview.changed) {
       toast('Inferência sem alterações. ' + summary.replace(/\n/g, ' | '), 'warn');
       return;
@@ -2192,8 +2283,11 @@ $('btn-infer').onclick = async () => {
       return;
     }
     toast('Topologia atualizada: ' + (result.changed || 0) + ' alterações. ' +
-          (result.physical_configured || 0) + ' ligações de switch configuradas; ' +
-          (result.logical_gateway || 0) + ' associações lógicas de gateway.', 'ok');
+          (result.physical_configured || 0) + ' configuradas; ' +
+          (result.passive_next_hop || 0) + ' por próximo salto passivo; ' +
+          (result.physical_advanced || 0) + ' avançadas; ' +
+          (result.logical_gateway || 0) + ' lógicas.', 'ok');
+    loadTopologyStatus();
     if (result.conflicts || result.cycles_prevented) {
       toast('Ignorados: ' + (result.conflicts || 0) + ' vínculos ambíguos e ' +
             (result.cycles_prevented || 0) + ' ciclos.', 'warn');

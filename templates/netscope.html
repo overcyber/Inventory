@@ -90,6 +90,14 @@
             </div>
 
             <div class="sidebar-section">
+                <div class="topology-mode-box">
+                    <label class="section-label" for="topology-mode">{{ translate('Modo de topologia') }}</label>
+                    <select id="topology-mode" class="topology-mode-select" title="{{ translate('Básico funciona sem switch gerenciável; Avançado acrescenta SNMP/LLDP/CDP/FDB') }}">
+                        <option value="basic">{{ translate('Básico — ativo + passivo local') }}</option>
+                        <option value="advanced">{{ translate('Avançado — + SNMP/LLDP/CDP/FDB') }}</option>
+                    </select>
+                    <div id="topology-mode-status" class="topology-mode-status">—</div>
+                </div>
                 <div class="btn-group">
                     <button class="btn btn-primary" id="btn-scan" title="{{ translate('Escanear redes configuradas') }}">
                         <i class="fas fa-wifi"></i> {{ translate('Scan') }}

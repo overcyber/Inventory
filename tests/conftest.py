@@ -31,6 +31,6 @@ def app():
 @pytest.fixture(autouse=True)
 def clean_asset_tables(app):
     with app.app_context():
-        db.session.execute(text("""TRUNCATE TABLE asset_dead_letters,asset_outbox,asset_identity_conflicts,asset_changes,asset_snapshots,asset_observations,asset_source_states,asset_ports,asset_services,asset_processes,asset_software,asset_hardware,asset_interfaces,asset_addresses,asset_identifiers,assets RESTART IDENTITY CASCADE"""))
+        db.session.execute(text("""TRUNCATE TABLE netscope_topology_evidence,netscope_flow_aggregates,netscope_identity_observations,asset_dead_letters,asset_outbox,asset_identity_conflicts,asset_changes,asset_snapshots,asset_observations,asset_source_states,asset_ports,asset_services,asset_processes,asset_software,asset_hardware,asset_interfaces,asset_addresses,asset_identifiers,assets RESTART IDENTITY CASCADE"""))
         db.session.commit()
     yield

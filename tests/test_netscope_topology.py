@@ -97,15 +97,17 @@ def test_duplicate_gateway_ip_does_not_create_edges():
     assert plan == {}
 
 
-def test_device_local_switch_port_is_accepted():
+def test_device_local_switch_port_alone_is_not_trusted():
+    # Legacy switch_port may have been populated automatically from FDB.
+    # Only the operator switch configuration is authoritative.
     devices = [
         device('sw', '10.0.0.2', 'switch'),
         device('host', '10.0.0.8',
                switch_port={'switch_mac': 'sw', 'port': 7}),
     ]
     plan, summary = infer_topology(devices, {'networks': []})
-    assert plan['host']['parent_id'] == 'sw'
-    assert summary['physical_configured'] == 1
+    assert 'host' not in plan
+    assert summary['physical_configured'] == 0
 
 
 def test_store_infer_preview_does_not_mutate(monkeypatch):
