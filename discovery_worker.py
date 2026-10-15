@@ -14,6 +14,17 @@ from services.netscope_passive import start_passive_collector
 from services.netscope_topology_evidence import expire_stale
 
 app = create_app()
+with app.app_context():
+    try:
+        from services.netscope_core import store
+        reconciled = store.reconcile_weak_ip_duplicates(flush=True)
+        if reconciled:
+            app.logger.warning(
+                '[Discovery] reconciliados %s duplicado(s) provisório(s) de IP',
+                reconciled)
+    except Exception as exc:
+        app.logger.exception(
+            '[Discovery] falha ao reconciliar duplicados provisórios: %s', exc)
 passive = start_passive_collector(app)
 interval = max(300, int(os.getenv('NETSCOPE_DISCOVERY_INTERVAL', '900')))
 next_automatic = time.monotonic()

@@ -2704,3 +2704,40 @@ html[dir="rtl"] #ns-root .ip-conflict-tag {
     opacity: .92;
     stroke-width: 2.2;
 }
+
+
+/* Infer confirmation uses the same NetScope modal language as the rest of the UI. */
+#ns-root .infer-confirm-intro {
+    margin: 0 0 12px;
+    color: var(--gray);
+    font-size: .82rem;
+    line-height: 1.45;
+}
+#ns-root .infer-confirm-summary {
+    display: grid;
+    gap: 7px;
+}
+#ns-root .infer-confirm-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--card-bg) 94%, transparent);
+}
+#ns-root .infer-confirm-row .label {
+    color: var(--text);
+    font-size: .78rem;
+}
+#ns-root .infer-confirm-row .value {
+    min-width: 38px;
+    text-align: right;
+    font-weight: 700;
+    color: var(--primary);
+    font-variant-numeric: tabular-nums;
+}
+#ns-root .infer-confirm-row.warn .value {
+    color: var(--warning);
+}

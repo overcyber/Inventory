@@ -556,6 +556,29 @@
         </div>
     </div>
 
+    <div class="modal" id="modal-infer-confirm">
+        <div class="modal-content" style="max-width:560px">
+            <button class="close" id="infer-confirm-x" type="button"><i class="fas fa-times"></i></button>
+            <div class="modal-header">
+                <i class="fas fa-diagram-project" style="color:var(--primary)"></i>
+                <h2>{{ translate('Confirmar inferência de topologia') }}</h2>
+            </div>
+            <div class="modal-body">
+                <p class="infer-confirm-intro">{{ translate('Revise as alterações propostas antes de aplicar. Nenhum vínculo manual será alterado.') }}</p>
+                <div id="infer-confirm-summary" class="infer-confirm-summary"></div>
+            </div>
+            <div class="modal-footer">
+                <div></div>
+                <div>
+                    <button class="btn btn-outline" id="infer-confirm-cancel" type="button">{{ translate('Cancelar') }}</button>
+                    <button class="btn btn-primary" id="infer-confirm-ok" type="button">
+                        <i class="fas fa-check"></i> {{ translate('Aplicar') }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="modal" id="modal-conflicts">
         <div class="modal-content" style="max-width:470px">
             <button class="close" data-modal="modal-conflicts"><i class="fas fa-times"></i></button>

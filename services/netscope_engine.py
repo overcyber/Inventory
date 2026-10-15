@@ -220,6 +220,11 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
             'discovery': 'tcp-connect', 'reachable_tcp_port': port,
         }
 
+    # Clean up only the duplicate pattern created by a provisional
+    # MAC-less row plus one verified MAC on the same IP. Real multi-MAC IP
+    # conflicts are intentionally preserved.
+    reconciled_before = store.reconcile_weak_ip_duplicates(flush=True)
+
     if all_found:
         dns_results = {}
         with ThreadPoolExecutor(max_workers=32) as pool:
@@ -244,9 +249,11 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
             if mac:
                 found_macs.add(mac)
         store.mark_offline(found_macs)
+        reconciled_after = store.reconcile_weak_ip_duplicates(flush=True)
     else:
         # Failed/empty scan does not prove the whole network is down.
         new_count = 0
+        reconciled_after = 0
 
     wazuh_stats = _auto_wazuh_sync()
     try:
@@ -284,6 +291,7 @@ def _run_scan_inner(networks, scan_cfg, auto_snapshot=False):
             'total': len(all_found), 'errors': errors,
             'warnings': warnings, 'ping_found': ping_count,
             'tcp_found': len(tcp_found), 'tcp_probed': len(known_ips),
+            'ip_duplicates_reconciled': reconciled_before + reconciled_after,
             'arp_found': sum(1 for i in all_found.values()
                              if i.get('discovery') == 'arp-active'),
             'wazuh_synced': wazuh_stats is not None,

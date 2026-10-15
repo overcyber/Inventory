@@ -2208,6 +2208,10 @@ function pollScanStatus() {
     }
     const tcpN = r.tcp_found || 0;
     if (tcpN) toast(t('{n} hosts confirmados por TCP (ICMP filtrado)', {n: tcpN}), 'ok');
+    const reconciledN = Number(r.ip_duplicates_reconciled || 0);
+    if (reconciledN) {
+      toast(reconciledN + ' duplicado(s) provisório(s) de IP reconciliado(s) sem remover conflitos reais.', 'ok');
+    }
     if (r.warnings && r.warnings.length) {
       toast(t('ARP indisponível em algumas redes roteadas; use SNMP/LLDP para obter MACs'), 'warn');
     }
@@ -2243,6 +2247,47 @@ $('btn-scan').onclick = async () => {
   pollScanStatus();
 };
 
+let _inferConfirmResolve = null;
+
+function settleInferConfirm(ok) {
+  const resolve = _inferConfirmResolve;
+  _inferConfirmResolve = null;
+  closeModal('modal-infer-confirm');
+  if (resolve) resolve(Boolean(ok));
+}
+
+function showInferConfirm(preview) {
+  const rows = [
+    ['Modo', preview.mode || 'basic', false],
+    ['Portas de switch configuradas', preview.physical_configured || 0, false],
+    ['Próximos saltos passivos', preview.passive_next_hop || 0, false],
+    ['Ligações LLDP/CDP/FDB', preview.physical_advanced || 0, false],
+    ['Associações lógicas aos gateways', preview.logical_gateway || 0, false],
+    ['Papéis/centralidade a atualizar', preview.role_updates || 0, false],
+    ['Vínculos manuais preservados', preview.manual_preserved || 0, false],
+    ['Sem evidência suficiente', preview.unresolved || 0, true],
+    ['Inferências antigas a remover', preview.cleared || 0, true],
+    ['Total de alterações', preview.changed || 0, false],
+  ];
+  $('infer-confirm-summary').innerHTML = rows.map(([label, value, warn]) =>
+    '<div class="infer-confirm-row' + (warn && Number(value) ? ' warn' : '') + '">' +
+      '<span class="label">' + esc(String(label)) + '</span>' +
+      '<span class="value">' + esc(String(value)) + '</span>' +
+    '</div>'
+  ).join('');
+  $('infer-confirm-ok').innerHTML =
+    '<i class="fas fa-check"></i> Aplicar ' + (preview.changed || 0) + ' alteração(ões)';
+  openModal('modal-infer-confirm');
+  return new Promise(resolve => { _inferConfirmResolve = resolve; });
+}
+
+$('infer-confirm-ok').onclick = () => settleInferConfirm(true);
+$('infer-confirm-cancel').onclick = () => settleInferConfirm(false);
+$('infer-confirm-x').onclick = () => settleInferConfirm(false);
+$('modal-infer-confirm').addEventListener('click', e => {
+  if (e.target === $('modal-infer-confirm')) settleInferConfirm(false);
+});
+
 $('btn-infer').onclick = async () => {
   const btn = $('btn-infer');
   setBtnLoading(btn, true);
@@ -2268,10 +2313,8 @@ $('btn-infer').onclick = async () => {
       toast('Inferência sem alterações. ' + summary.replace(/\n/g, ' | '), 'warn');
       return;
     }
-    if (!window.confirm(
-        'Prévia da topologia:\n\n' + summary +
-        '\n\nAplicar ' + preview.changed + ' alteração(ões)?' +
-        '\n(Nenhum vínculo manual será alterado.)')) {
+    if (!(await showInferConfirm(preview))) {
+      toast('Inferência cancelada — nenhuma alteração aplicada.', 'info');
       return;
     }
     const result = await api('/netscope/api/infer', {
@@ -2453,6 +2496,10 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); $('inp-search').focus(); }
   if (e.key === 'Escape') {
     hideCtxMenu();
+    if ($('modal-infer-confirm').classList.contains('active')) {
+      settleInferConfirm(false);
+      return;
+    }
     if (S.ctrlLink) { cancelCtrlLink(); return; }
     ['modal-edit','modal-add','modal-trash','modal-json','modal-switches','modal-snapshots','modal-assets','modal-agents','modal-cidr','modal-portscan'].forEach(id => { if ($(id).classList.contains('active')) { closeModal(id); _editingSubnet = null; return; } });
     hidePopover();

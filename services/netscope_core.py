@@ -426,9 +426,24 @@ class Store:
             devices = []
             for r in rows:
                 dev = dict(r.data) if isinstance(r.data, dict) else {}
-                dev.setdefault('mac', (r.mac or '').lower())
+                db_mac = (r.mac or '').lower()
+                json_mac = str(dev.get('mac') or '').lower()
+                # Structured SQL columns are authoritative for identity.
+                # JSON may lag behind after older migrations/partial writes.
+                dev['mac'] = db_mac or json_mac
                 if str(dev.get('mac') or '').startswith('ip:'):
                     dev['mac'] = ''
+                if r.ip:
+                    dev['ip'] = r.ip
+                else:
+                    dev.setdefault('ip', '')
+                if r.hostname:
+                    dev['hostname'] = r.hostname
+                else:
+                    dev.setdefault('hostname', '')
+                dev['deleted'] = bool(r.deleted)
+                if r.last_seen and not dev.get('last_seen'):
+                    dev['last_seen'] = r.last_seen.isoformat()
                 if not dev.get('uid'):
                     dev['uid'] = dev['mac'] or gen_uid()
                 devices.append(dev)
@@ -644,6 +659,116 @@ class Store:
             'agent_exempt': False,
         }
 
+    def _merge_weak_ip_record(self, canonical, weak, reason):
+        """Merge a MAC-less provisional record into a verified identity.
+
+        This is deliberately narrow: only a record with no MAC can be merged
+        automatically. Two different real MACs on the same IP remain an IP
+        conflict and are never collapsed.
+        """
+        if not canonical or not weak or canonical is weak:
+            return False
+        if (weak.get('mac') or '').strip():
+            return False
+        if (canonical.get('ip') or '') != (weak.get('ip') or ''):
+            return False
+
+        canonical_key = dev_key(canonical)
+        weak_key = dev_key(weak)
+        if not canonical_key or not weak_key:
+            return False
+
+        fill_fields = (
+            'hostname', 'dns_name', 'vendor', 'notes', 'user', 'department',
+            'location', 'asset_tag', 'model', 'serial_number', 'os',
+            'seal_number', 'switch_port', 'parent_id', 'pos',
+            'agent_id', 'agent_name', 'agent_status',
+            'agent_last_keepalive', 'agent_groups', 'agent_ip',
+        )
+        for field in fill_fields:
+            if not canonical.get(field) and weak.get(field):
+                canonical[field] = weak[field]
+
+        if (canonical.get('type') in (None, '', 'desktop')
+                and weak.get('type') not in (None, '', 'desktop')):
+            canonical['type'] = weak['type']
+        if not canonical.get('has_agent') and weak.get('has_agent'):
+            canonical['has_agent'] = True
+        if not canonical.get('agent_exempt') and weak.get('agent_exempt'):
+            canonical['agent_exempt'] = True
+        if not canonical.get('name_manual') and weak.get('name_manual'):
+            canonical['name_manual'] = True
+
+        first_values = [x for x in (
+            canonical.get('first_seen'), weak.get('first_seen')) if x]
+        if first_values:
+            canonical['first_seen'] = min(first_values)
+        last_values = [x for x in (
+            canonical.get('last_seen'), weak.get('last_seen')) if x]
+        if last_values:
+            canonical['last_seen'] = max(last_values)
+
+        # Redirect topology/config references before moving the weak record to
+        # the trash, so no child or configured switch port becomes orphaned.
+        for device in self._cache['devices']:
+            if (device.get('parent_id') or '').lower() == weak_key:
+                device['parent_id'] = canonical_key
+
+        try:
+            cfg = load_config()
+            changed_cfg = False
+            for sw in (cfg.get('switches') or {}).values():
+                if not isinstance(sw, dict):
+                    continue
+                for port in (sw.get('ports') or {}).values():
+                    if (isinstance(port, dict)
+                            and (port.get('device_mac') or '').lower() == weak_key):
+                        port['device_mac'] = canonical_key
+                        changed_cfg = True
+            if changed_cfg:
+                save_config(cfg)
+        except Exception:
+            pass
+
+        weak['deleted'] = True
+        weak['deleted_at'] = datetime.now().isoformat()
+        weak['merged_into'] = canonical_key
+        weak['merge_reason'] = reason
+        weak['status'] = 'merged'
+        return True
+
+    def reconcile_weak_ip_duplicates(self, flush=True):
+        """Collapse only system-generated strong+MAC-less duplicate IP rows.
+
+        Real conflicts (2+ different non-empty MACs on one IP) are preserved.
+        """
+        with self._lock:
+            self._load()
+            groups = {}
+            for device in self._cache['devices']:
+                if device.get('deleted'):
+                    continue
+                ip = (device.get('ip') or '').strip()
+                if ip:
+                    groups.setdefault(ip, []).append(device)
+
+            merged = 0
+            for ip, devices in groups.items():
+                strong = [d for d in devices if (d.get('mac') or '').strip()]
+                weak = [d for d in devices if not (d.get('mac') or '').strip()]
+                if len(strong) != 1 or not weak:
+                    continue
+                canonical = strong[0]
+                for duplicate in weak:
+                    if self._merge_weak_ip_record(
+                            canonical, duplicate,
+                            'Reconciliação automática: registro provisório sem MAC '
+                            'duplicava um dispositivo com MAC verificado no mesmo IP'):
+                        merged += 1
+            if merged and flush:
+                self._flush()
+            return merged
+
     def upsert_scan_result(self, mac, info, flush=True):
 
         with self._lock:
@@ -673,7 +798,32 @@ class Store:
                     existing['mac'] = ''
                 if mac and not existing.get('mac'):
                     existing['mac'] = mac
-                existing['ip'] = info['ip']
+
+                target_ip = info['ip']
+                if mac:
+                    target_rows = [
+                        d for d in self._cache['devices']
+                        if not d.get('deleted') and d is not existing
+                        and d.get('ip') == target_ip
+                    ]
+                    other_strong = [
+                        d for d in target_rows if (d.get('mac') or '').strip()
+                    ]
+                    # Known MAC moved to an IP occupied only by provisional
+                    # MAC-less rows: merge those placeholders into the known
+                    # device instead of leaving duplicate active IP rows.
+                    if not other_strong:
+                        original_ip = existing.get('ip')
+                        existing['ip'] = target_ip
+                        for duplicate in target_rows:
+                            if not (duplicate.get('mac') or '').strip():
+                                self._merge_weak_ip_record(
+                                    existing, duplicate,
+                                    'Reconciliação automática: MAC conhecido '
+                                    'assumiu IP de registro provisório sem MAC')
+                        existing['ip'] = original_ip
+
+                existing['ip'] = target_ip
                 existing['vendor'] = info['vendor'] or existing.get('vendor', '')
                 existing['status'] = 'online'
                 existing['last_seen'] = now
@@ -830,6 +980,13 @@ class Store:
                 return None, 400, mac_err
             if mac and self.find(mac):
                 return None, 409, 'Dispositivo com este MAC já existe'
+            same_ip = self.find_by_ip(ip)
+            if same_ip:
+                return None, 409, (
+                    'Já existe um dispositivo ativo com este IP. '
+                    'Use o dispositivo existente ou deixe a descoberta '
+                    'registrar um conflito real de rede.'
+                )
 
             subnet_str = body.get('subnet', '').strip()
             gw = ''
@@ -865,6 +1022,17 @@ class Store:
                         if other and other is not dev:
                             return None, 409, 'Dispositivo com este MAC já existe'
                     dev['mac'] = new_mac
+
+            if 'ip' in body:
+                new_ip = str(body.get('ip') or '').strip()
+                current_ip = str(dev.get('ip') or '').strip()
+                if new_ip and new_ip != current_ip:
+                    other_ip = self.find_by_ip(new_ip)
+                    if other_ip and other_ip is not dev:
+                        return None, 409, (
+                            'Já existe um dispositivo ativo com este IP. '
+                            'A edição manual não cria duplicidade de IP.'
+                        )
 
             for key_ in ('hostname', 'type', 'notes', 'subnet', 'name', 'ip'):
                 if key_ in body:
