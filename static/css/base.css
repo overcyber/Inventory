@@ -1605,3 +1605,35 @@ html[dir="rtl"] #ai-fab .ai-fab-badge {
         right: auto;
         left: -4px;
 }
+
+
+/* Reusable application confirmation dialog. Replaces native browser confirm(). */
+.app-confirm-content {
+        max-width: 500px;
+}
+.app-confirm-body {
+        margin-top: 1.25rem;
+        color: var(--dark);
+        line-height: 1.55;
+}
+.app-confirm-body p {
+        margin: 0;
+        white-space: pre-line;
+}
+.app-confirm-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: .75rem;
+        margin-top: 1.75rem;
+}
+#app-confirm-ok.app-confirm-danger {
+        background: var(--danger);
+        border-color: var(--danger);
+        color: var(--white);
+}
+#app-confirm-ok.app-confirm-danger:hover {
+        filter: brightness(.92);
+}
+html.dark-mode .app-confirm-body {
+        color: var(--dark);
+}

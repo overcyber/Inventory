@@ -1147,7 +1147,12 @@ async function handleCtxAction(act, node) {
     if (r.error) { toast(r.error, 'err'); return; }
     toast(t('Desassociado'), 'ok'); loadDevices();
   } else if (act === 'trash') {
-    if (confirm(t('Mover {n} para lixeira?', {n: node.name}))) {
+    if (await window.appConfirm({
+      title: 'Mover para lixeira',
+      message: t('Mover {n} para lixeira?', {n: node.name}),
+      confirmText: 'Mover para lixeira',
+      danger: true
+    })) {
       const r = await api('/netscope/api/devices/' + node.id, { method: 'DELETE' });
       if (r.error) { toast(r.error, 'err'); return; }
       loadDevices(); toast(t('Movido para lixeira'), 'warn');
@@ -1330,7 +1335,12 @@ popoverEl.querySelector('.popover-actions').addEventListener('click', async e =>
   }
   else if (act === 'trash') {
     hidePopover();
-    if (confirm(t('Mover {n} para lixeira?', {n: node.name}))) {
+    if (await window.appConfirm({
+      title: 'Mover para lixeira',
+      message: t('Mover {n} para lixeira?', {n: node.name}),
+      confirmText: 'Mover para lixeira',
+      danger: true
+    })) {
       const r = await api('/netscope/api/devices/' + node.id, { method: 'DELETE' });
       if (r.error) { toast(r.error, 'err'); return; }
       loadDevices(); toast(t('Movido para lixeira'), 'warn');
@@ -1485,7 +1495,14 @@ $('ed-btn-unlink').onclick = async () => {
   closeEditModal(); loadDevices(); toast(t('Desassociado'), 'ok');
 };
 $('ed-btn-del').onclick = async () => {
-  const key = $('ed-id').value; if (!key || !confirm(t('Mover para lixeira?'))) return;
+  const key = $('ed-id').value;
+  if (!key) return;
+  if (!(await window.appConfirm({
+    title: 'Mover para lixeira',
+    message: t('Mover para lixeira?'),
+    confirmText: 'Mover para lixeira',
+    danger: true
+  }))) return;
   const r = await api('/netscope/api/devices/' + key, { method: 'DELETE' });
   if (r.error) { toast(r.error, 'err'); return; }
   closeEditModal(); loadDevices(); toast(t('Movido para lixeira'), 'warn');
@@ -1707,7 +1724,12 @@ function renderSnapshotList() {
         if (cmp.error) { toast(cmp.error, 'err'); return; }
         showCompareResult(cmp);
       } else if (act === 'delete') {
-        if (!confirm(t('Excluir snapshot?'))) return;
+        if (!(await window.appConfirm({
+          title: 'Excluir snapshot',
+          message: t('Excluir snapshot?'),
+          confirmText: 'Excluir',
+          danger: true
+        }))) return;
         const r = await api('/netscope/api/snapshots/' + id, { method: 'DELETE' });
         if (r.error) { toast(r.error, 'err'); return; }
         toast(t('Snapshot excluído'), 'ok');
@@ -1939,7 +1961,12 @@ $('asset-bulk-delete').onclick = async () => {
   const uids = Array.from(S.assetSel);
   if (!uids.length) return;
   const n = uids.length;
-  if (!confirm(t('Excluir {n} ativo(s)? Eles vão para a lixeira e podem ser restaurados.', {n: n}))) return;
+  if (!(await window.appConfirm({
+    title: 'Mover ativos para lixeira',
+    message: t('Excluir {n} ativo(s)? Eles vão para a lixeira e podem ser restaurados.', {n: n}),
+    confirmText: 'Mover ' + n + ' ativo(s)',
+    danger: true
+  }))) return;
   const btn = $('asset-bulk-delete');
   btn.disabled = true;
   const r = await api('/netscope/api/devices/bulk-delete', {
@@ -2005,7 +2032,12 @@ $('btn-trash').onclick = async () => {
   });
   el.querySelectorAll('.btn-perma').forEach(b => {
     b.onclick = async () => {
-      if (!confirm(t('Excluir permanentemente?'))) return;
+      if (!(await window.appConfirm({
+        title: 'Excluir permanentemente',
+        message: t('Excluir permanentemente?'),
+        confirmText: 'Excluir permanentemente',
+        danger: true
+      }))) return;
       const r = await api('/netscope/api/trash/' + b.dataset.id, { method: 'DELETE' });
       if (r.error) { toast(r.error, 'err'); return; }
       toast(t('Excluído'), 'err'); b.closest('.del-item').remove();

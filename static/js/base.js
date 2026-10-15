@@ -55,12 +55,14 @@ document.addEventListener('DOMContentLoaded', function() {
         const btn = e.target.closest('.modal .close');
         if (btn) {
             const m = btn.closest('.modal');
+            if (m && m.id === 'app-confirm-modal') return;
             if (m && !btn.hasAttribute('data-modal') && !_nsModal(m)) {
                 window.closeModalFade(m);
             }
             return;
         }
 
+        if (e.target && e.target.id === 'app-confirm-modal') return;
         if (e.target.classList && e.target.classList.contains('modal') && !_nsModal(e.target)) {
             window.closeModalFade(e.target);
         }
@@ -69,7 +71,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             document.querySelectorAll('.modal.active').forEach(m => {
-                if (_nsModal(m)) return;
+                if (_nsModal(m) || m.id === 'app-confirm-modal') return;
                 window.closeModalFade(m);
             });
         }
@@ -141,6 +143,76 @@ function showToast(message, category = 'success') {
         }
     }, 5000);
 }
+
+
+let _appConfirmResolve = null;
+
+function _settleAppConfirm(result) {
+    const resolve = _appConfirmResolve;
+    _appConfirmResolve = null;
+    const modal = document.getElementById('app-confirm-modal');
+    if (modal) {
+        if (window.closeModalFade) window.closeModalFade(modal);
+        else modal.classList.remove('active');
+    }
+    if (resolve) resolve(Boolean(result));
+}
+
+window.appConfirm = function appConfirm(options) {
+    const opts = (typeof options === 'string') ? { message: options } : (options || {});
+    const modal = document.getElementById('app-confirm-modal');
+    if (!modal) {
+        showToast(opts.message || 'Confirmação indisponível.', 'warning');
+        return Promise.resolve(false);
+    }
+
+    // Resolve any older unresolved confirmation defensively.
+    if (_appConfirmResolve) _settleAppConfirm(false);
+
+    const title = document.getElementById('app-confirm-title');
+    const message = document.getElementById('app-confirm-message');
+    const ok = document.getElementById('app-confirm-ok');
+    const cancel = document.getElementById('app-confirm-cancel');
+    const icon = document.getElementById('app-confirm-icon');
+
+    title.textContent = opts.title || 'Confirmar ação';
+    message.textContent = opts.message || '';
+    ok.textContent = opts.confirmText || 'Confirmar';
+    cancel.textContent = opts.cancelText || 'Cancelar';
+    ok.classList.toggle('app-confirm-danger', Boolean(opts.danger));
+    icon.className = 'fas ' + (opts.danger ? 'fa-triangle-exclamation' : 'fa-circle-question');
+
+    modal.classList.remove('closing');
+    modal.classList.add('active');
+    return new Promise(resolve => { _appConfirmResolve = resolve; });
+};
+
+(function bindAppConfirm() {
+    function bind() {
+        const modal = document.getElementById('app-confirm-modal');
+        const ok = document.getElementById('app-confirm-ok');
+        const cancel = document.getElementById('app-confirm-cancel');
+        const close = document.getElementById('app-confirm-close');
+        if (!modal || !ok || !cancel || !close || modal.dataset.bound === '1') return;
+        modal.dataset.bound = '1';
+        ok.addEventListener('click', function () { _settleAppConfirm(true); });
+        cancel.addEventListener('click', function () { _settleAppConfirm(false); });
+        close.addEventListener('click', function () { _settleAppConfirm(false); });
+        modal.addEventListener('click', function (e) {
+            if (e.target === modal) _settleAppConfirm(false);
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && modal.classList.contains('active')) {
+                _settleAppConfirm(false);
+            }
+        });
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bind, { once: true });
+    } else {
+        bind();
+    }
+})();
 
 (function sessionGuard() {
     if (location.pathname.indexOf('/login') === 0) return;
@@ -421,8 +493,13 @@ function showToast(message, category = 'success') {
 
         var clearReadBtn = panel.querySelector('#ai-notif-clearread');
         if (clearReadBtn) {
-            clearReadBtn.addEventListener('click', function () {
-                if (!window.confirm(t('del_read'))) return;
+            clearReadBtn.addEventListener('click', async function () {
+                if (!(await window.appConfirm({
+                    title: t('del_item'),
+                    message: t('del_read'),
+                    confirmText: t('del_item'),
+                    danger: true
+                }))) return;
                 fetch('/notifications/api/clear_read', { method: 'POST' })
                     .then(function (r) { return r.ok ? r.json() : null; })
                     .then(function (d) {
@@ -739,9 +816,14 @@ function showToast(message, category = 'success') {
 
         var clearChatBtn = panel.querySelector('#ai-history-clear');
         if (clearChatBtn) {
-            clearChatBtn.addEventListener('click', function () {
+            clearChatBtn.addEventListener('click', async function () {
                 if (clearChatBtn.disabled) return;
-                if (!window.confirm(t('new_chat_confirm'))) return;
+                if (!(await window.appConfirm({
+                    title: t('new_chat'),
+                    message: t('new_chat_confirm'),
+                    confirmText: t('new_chat'),
+                    danger: true
+                }))) return;
                 clearChatBtn.disabled = true;
                 fetch('/assistant/api/history/clear', { method: 'POST' })
                     .then(function (r) { return r.ok ? r.json() : null; })

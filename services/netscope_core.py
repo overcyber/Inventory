@@ -537,7 +537,7 @@ class Store:
         # Keep the choice deterministic so every worker resolves the same row.
         matches.sort(key=lambda d: (
             0 if (d.get('mac') or '').strip() else 1,
-            0 if (d.get('has_agent') else 1),
+            0 if d.get('has_agent') else 1,
             str(d.get('uid') or ''),
         ))
         return matches[0]

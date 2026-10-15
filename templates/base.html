@@ -384,6 +384,31 @@
     };</script>
     {% endif %}
 
+    <div class="modal app-confirm-modal" id="app-confirm-modal" role="dialog" aria-modal="true"
+         aria-labelledby="app-confirm-title">
+        <div class="modal-content app-confirm-content">
+            <button class="close" id="app-confirm-close" type="button"
+                    aria-label="{{ translate('Fechar') }}">
+                <i class="fas fa-times"></i>
+            </button>
+            <div class="modal-header">
+                <i id="app-confirm-icon" class="fas fa-circle-question"></i>
+                <h2 id="app-confirm-title">{{ translate('Confirmar ação') }}</h2>
+            </div>
+            <div class="app-confirm-body">
+                <p id="app-confirm-message"></p>
+            </div>
+            <div class="app-confirm-actions">
+                <button type="button" class="btn btn-outline" id="app-confirm-cancel">
+                    {{ translate('Cancelar') }}
+                </button>
+                <button type="button" class="btn btn-primary" id="app-confirm-ok">
+                    {{ translate('Confirmar') }}
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>window.__GW_ALIASES = {{ gw_aliases|tojson }};</script>
     <script src="{{ url_for('static', filename='js/base.js') }}"></script>
     {% block extra_js %}{% endblock %}
