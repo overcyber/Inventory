@@ -1,10 +1,11 @@
 from __future__ import annotations
 import hashlib, hmac, os, secrets, threading
 from datetime import datetime
-from flask import Blueprint, jsonify, request, session
+from functools import wraps
+from flask import Blueprint, jsonify, request, session, redirect, url_for
 from models import (ApiToken, Asset, AssetChange, AssetDeadLetter, AssetObservation,
                     AssetOutbox, AssetSnapshot, AssetSourceState, db)
-from core.security import MemoryRateLimiter, login_required, admin_required
+from core.security import MemoryRateLimiter, login_required, admin_required, is_api_request, _api_error
 from services.asset_core import asset_to_machine, generic_payload_to_state, ingest_observation, source_states
 
 asset_bp=Blueprint('assets_api',__name__,url_prefix='/api/v1')
@@ -36,6 +37,26 @@ def _ingest_authorized():
     key=(request.remote_addr or '?')+':'+_token_hash(_token_value() or 'anonymous')[:16]
     return _INGEST_LIMIT.allow(key) and _has_scope('ingest')
 
+def read_required(f):
+    """Leitura do Asset Core: sessao de navegador OU token de maquina com escopo 'read'.
+
+    Integracao Aegis (overcyber): permite que o Aegis SOAR sincronize ativos via
+    GET /api/v1/assets sem sessao de navegador, usando Bearer token (env
+    INVENTORY_INGEST_TOKEN ou token da tabela api_tokens com scope read/*).
+    Sessao humana continua valendo exatamente como antes (login_required).
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if session.get('username'):
+            return f(*args, **kwargs)
+        if _has_scope('read'):
+            return f(*args, **kwargs)
+        if is_api_request():
+            return _api_error('Sessão expirada ou autenticação necessária.',401,
+                              session_expired=True)
+        return redirect(url_for('login'))
+    return decorated
+
 def _serialize_token(row):
     return {'id':row.id,'name':row.name,'scopes':row.scopes or [],'active':row.active,
             'created_at':row.created_at.isoformat() if row.created_at else None,
@@ -43,7 +64,7 @@ def _serialize_token(row):
             'last_used_at':row.last_used_at.isoformat() if row.last_used_at else None}
 
 @asset_bp.get('/assets')
-@login_required
+@read_required
 def list_assets():
     limit=max(1,min(request.args.get('limit',200,type=int),2000))
     offset=max(0,request.args.get('offset',0,type=int))
@@ -60,7 +81,7 @@ def list_assets():
     return jsonify({'items':[asset_to_machine(a) for a in rows],'total':total,'limit':limit,'offset':offset})
 
 @asset_bp.get('/assets/<asset_uuid>')
-@login_required
+@read_required
 def get_asset(asset_uuid):
     asset=Asset.query.filter_by(asset_uuid=asset_uuid).first_or_404()
     sources=(AssetSourceState.query.filter_by(asset_id=asset.id)
@@ -73,7 +94,7 @@ def get_asset(asset_uuid):
                   'state':x.state or {}} for x in sources]})
 
 @asset_bp.get('/assets/<asset_uuid>/changes')
-@login_required
+@read_required
 def get_asset_changes(asset_uuid):
     asset=Asset.query.filter_by(asset_uuid=asset_uuid).first_or_404()
     limit=max(1,min(request.args.get('limit',200,type=int),2000))
@@ -83,7 +104,7 @@ def get_asset_changes(asset_uuid):
        'source':x.source,'path':x.path,'old':x.old_value,'new':x.new_value} for x in rows]})
 
 @asset_bp.get('/assets/<asset_uuid>/snapshots')
-@login_required
+@read_required
 def get_asset_snapshots(asset_uuid):
     asset=Asset.query.filter_by(asset_uuid=asset_uuid).first_or_404()
     limit=max(1,min(request.args.get('limit',100,type=int),500))
@@ -93,7 +114,7 @@ def get_asset_snapshots(asset_uuid):
       'observed_at':x.observed_at.isoformat() if x.observed_at else None,'state':x.state} for x in rows]})
 
 @asset_bp.get('/sources')
-@login_required
+@read_required
 def get_sources(): return jsonify({'sources':source_states()})
 
 def _one_observation(body):

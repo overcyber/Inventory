@@ -13,3 +13,11 @@ build/
 
 # ssl/key.pem and logs/ are intentionally NOT removed/ignored in this
 # repository revision per maintainer instruction.
+
+# laboratorio local: certificados regenerados pelo cert-init e backups nao versionados
+ssl/cert.pem
+ssl/key.pem
+ssl/ca-key.pem
+ssl/*.invalid.*
+.backups/
+*.bak
