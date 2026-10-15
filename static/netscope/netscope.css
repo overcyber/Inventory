@@ -2674,19 +2674,52 @@ html[dir="rtl"] #ns-root .ip-conflict-tag {
 #ns-root .topology-mode-box {
     margin-bottom: 7px;
     padding: 7px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--light-gray);
     border-radius: 7px;
-    background: color-mix(in srgb, var(--card-bg) 92%, transparent);
+    background: var(--white);
 }
 #ns-root .topology-mode-select {
     width: 100%;
     min-height: 32px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--light-gray);
     border-radius: 6px;
-    background: var(--card-bg);
-    color: var(--text);
-    padding: 4px 7px;
+    background-color: var(--white);
+    color: var(--dark);
+    padding: 4px 28px 4px 7px;
     font-size: .75rem;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    outline: none;
+    color-scheme: inherit;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2394a3b8' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+    transition: border-color .15s, box-shadow .15s, background-color .15s;
+}
+#ns-root .topology-mode-select:hover {
+    border-color: var(--primary);
+}
+#ns-root .topology-mode-select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, .12);
+}
+#ns-root .topology-mode-select option {
+    background: var(--white);
+    color: var(--dark);
+}
+html.dark-mode #ns-root .topology-mode-select,
+html.dark-mode #ns-root .topology-mode-select option {
+    background-color: #0f172a;
+    color: #f8fafc;
+}
+html.dark-mode #ns-root .topology-mode-box {
+    background: #0f172a;
+    border-color: #334155;
+}
+html.dark-mode #ns-root .topology-mode-select {
+    border-color: #334155;
 }
 #ns-root .topology-mode-status {
     margin-top: 5px;
