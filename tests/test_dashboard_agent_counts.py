@@ -53,7 +53,7 @@ def test_dashboard_wazuh_kpis_do_not_count_generic_active_assets(app, monkeypatc
         for i in range(10)
     ]
 
-    with app.app_context():
+    with app.test_request_context('/'):
         generic = get_machine_stats(machines)
         result = build_chart_response(generic, machines)
 
