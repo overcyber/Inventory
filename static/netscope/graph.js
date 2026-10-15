@@ -512,10 +512,12 @@ async function loadStats() {
   const r = await api('/netscope/api/stats');
   if (r.error) return;
   S.stats = r;
-  $('stat-online').textContent = r.online;
-  $('stat-offline').textContent = r.offline;
-  $('stat-offline').title = (r.unverified || 0) + ' dispositivos não verificados (não classificados como offline)';
-  $('stat-new').textContent = r.new_today;
+  $('stat-total').textContent = r.total || 0;
+  $('stat-online').textContent = r.online || 0;
+  $('stat-offline').textContent = r.offline || 0;
+  $('stat-unverified').textContent = r.unverified || 0;
+  $('stat-unverified').title = 'Dispositivos cuja disponibilidade ainda não foi confirmada';
+  $('stat-new').textContent = r.new_today || 0;
 
   const dupEl = $('stat-duplicates');
   if (dupEl) dupEl.textContent = r.duplicates || 0;

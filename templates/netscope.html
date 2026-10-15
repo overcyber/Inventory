@@ -17,8 +17,10 @@
             <div class="sidebar-resize-handle" id="sb-resize-handle"></div>
 
             <div class="stats-bar" id="stats-bar">
+                <div class="stat-item"><div class="stat-num" id="stat-total">0</div><div class="stat-label">{{ translate('Total') }}</div></div>
                 <div class="stat-item"><div class="stat-num on" id="stat-online">0</div><div class="stat-label">{{ translate('Online') }}</div></div>
                 <div class="stat-item"><div class="stat-num off" id="stat-offline">0</div><div class="stat-label">{{ translate('Offline') }}</div></div>
+                <div class="stat-item"><div class="stat-num unverified" id="stat-unverified">0</div><div class="stat-label">{{ translate('Não verificados') }}</div></div>
                 <div class="stat-item"><div class="stat-num new" id="stat-new">0</div><div class="stat-label">{{ translate('Novos') }}</div></div>
 
                 <div class="stat-item stat-conflict" id="stat-conflict-item" role="button" tabindex="0"

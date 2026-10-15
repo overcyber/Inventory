@@ -96,21 +96,14 @@ def api_stats():
         stats['duplicates'] = sum(len(g['uids']) for g in find_duplicates())
     except Exception:
         stats['duplicates'] = 0
-    try:
-        from models import HostInventory
-        hosts = HostInventory.query.filter_by(is_legacy=False).all()
-        stats['wazuh_total'] = len(hosts)
-        stats['wazuh_active'] = sum(
-            1 for h in hosts
-            if (h.data or {}).get('agent_info', {}).get('status') == 'active'
-        )
-        stats['wazuh_synced_at'] = max(
-            (h.last_updated.isoformat() for h in hosts if h.last_updated), default=None
-        )
-    except Exception:
-        stats['wazuh_total'] = 0
-        stats['wazuh_active'] = 0
-        stats['wazuh_synced_at'] = None
+    # Wazuh counters must use the same current NetScope inventory semantics.
+    # HostInventory is legacy and can contain historical rows unrelated to the
+    # current device set.
+    stats['wazuh_total'] = stats.get('with_agent', 0)
+    stats['wazuh_active'] = stats.get('agent_online', 0)
+    stats['wazuh_offline'] = stats.get('agent_offline', 0)
+    stats['wazuh_unknown'] = stats.get('agent_unknown', 0)
+    stats['wazuh_synced_at'] = None
     return jsonify(stats)
 
 @ns_bp.route('/api/conflicts')
@@ -607,30 +600,37 @@ def api_wazuh_sync():
 @ns_bp.route('/api/wazuh_agents')
 @ns_login_required
 def api_wazuh_agents():
-
     try:
-        from models import HostInventory
-        hosts = HostInventory.query.filter_by(is_legacy=False).order_by(HostInventory.hostname).all()
+        from services.netscope_wazuh_bridge import _query_hosts, _extract_host_info
+        infos = [_extract_host_info(h) for h in _query_hosts()]
+        infos = [i for i in infos
+                 if i.get('agent_id') or i.get('hostname') or i.get('agent_ip')]
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
     agents = []
-    for h in hosts:
-        data = h.data or {}
-        ai = data.get('agent_info', {}) or {}
-        inv = data.get('inventory', {}) or {}
-        macs = [nif.get('mac', '').lower() for nif in inv.get('netiface', []) or []
-                if nif.get('mac') and nif.get('mac') not in ('N/A', '00:00:00:00:00:00')]
-        ip = ai.get('ip', '')
-        in_netscope = any(store.find(m) for m in macs) or (bool(ip) and store.find_by_ip(ip) is not None)
+    seen = set()
+    for info in infos:
+        agent_key = str(info.get('agent_id') or info.get('hostname')
+                        or info.get('agent_ip') or '').lower()
+        if not agent_key or agent_key in seen:
+            continue
+        seen.add(agent_key)
+        macs = info.get('macs') or []
+        ip = info.get('agent_ip') or ''
+        in_netscope = (
+            any(store.find(m) for m in macs)
+            or (bool(ip) and store.find_by_ip(ip) is not None)
+        )
         agents.append({
-            'hostname': h.hostname,
-            'agent_id': ai.get('id', ''),
+            'hostname': info.get('hostname') or info.get('agent_name') or '',
+            'agent_id': info.get('agent_id') or '',
             'ip': ip,
             'mac': macs[0] if macs else '',
-            'status': ai.get('status', ''),
-            'last_keepalive': ai.get('lastKeepAlive', ''),
-            'groups': data.get('groups') or ai.get('group') or [],
+            'status': info.get('agent_status') or 'unknown',
+            'last_keepalive': info.get('last_keepalive') or '',
+            'groups': info.get('groups') or [],
             'in_netscope': in_netscope,
         })
+    agents.sort(key=lambda a: (a['hostname'].lower(), a['agent_id']))
     return jsonify({'agents': agents})

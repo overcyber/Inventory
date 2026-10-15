@@ -628,6 +628,18 @@ class Store:
                            if not d.get('has_agent') and d.get('agent_exempt'))
         offline = sum(1 for d in act if d.get('status') == 'offline')
         unverified = len(act) - online - offline
+        agent_online = sum(
+            1 for d in act
+            if d.get('has_agent')
+            and str(d.get('agent_status') or '').lower() == 'active'
+        )
+        agent_offline = sum(
+            1 for d in act
+            if d.get('has_agent')
+            and str(d.get('agent_status') or '').lower()
+            in ('disconnected', 'never_connected', 'offline')
+        )
+        agent_unknown = max(0, with_agent - agent_online - agent_offline)
         return {'total': len(act), 'online': online, 'offline': offline,
                 'unverified': unverified,
                 'types': types, 'new_today': new_today,
@@ -635,7 +647,10 @@ class Store:
                 'undocumented': len(act) - documented,
                 'with_agent': with_agent,
                 'without_agent': len(act) - with_agent - agent_exempt,
-                'agent_exempt': agent_exempt}
+                'agent_exempt': agent_exempt,
+                'agent_online': agent_online,
+                'agent_offline': agent_offline,
+                'agent_unknown': agent_unknown}
 
     def _new_device(self, mac, ip, vendor='', subnet='', gateway=None, source=''):
 

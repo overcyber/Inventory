@@ -41,8 +41,8 @@
         installedOn:      {{ translate('instalado em')|tojson }},
         machinesF:        {{ translate('máquinas')|tojson }},
 
-        activeMachines:   {{ translate('Agentes Wazuh Online')|tojson }},
-        inactiveMachines: {{ translate('Agentes Wazuh Offline')|tojson }},
+        activeMachines:   {{ translate('Ativos observados')|tojson }},
+        inactiveMachines: {{ translate('Inativos observados')|tojson }},
 
         noData:           {{ translate('Sem dados')|tojson }},
         notIdentified:    {{ translate('Não identificado')|tojson }},
@@ -502,14 +502,14 @@ input, textarea, select {
 
         </div>
 
-        <div class="kpi-card" data-card="kpi-agents-online" onclick="window.location.href='/search?query=agent_info:status:active'">
+        <div class="kpi-card" data-card="kpi-agents-online" onclick="window.location.href='/netscope?filter=agent'">
             <div class="kpi-header">
                 <div class="kpi-title">{{ translate('Agentes Wazuh Online') }}</div>
                 <div class="kpi-icon green"><i class="fas fa-check-circle"></i></div>
             </div>
             <div class="kpi-value" id="kpi-online">{{ active_count }}</div>
         </div>
-        <div class="kpi-card" data-card="kpi-agents-offline" onclick="window.location.href='/search?query=agent_info:status:disconnected'">
+        <div class="kpi-card" data-card="kpi-agents-offline" onclick="window.location.href='/netscope?filter=agent'">
             <div class="kpi-header">
                 <div class="kpi-title">{{ translate('Agentes Wazuh Offline') }}</div>
                 <div class="kpi-icon orange"><i class="fas fa-times-circle"></i></div>
@@ -647,7 +647,7 @@ input, textarea, select {
         <div class="detailed-card" data-card="dc-timeline">
             <div class="detailed-header">
 
-                <h3 class="detailed-title">{{ translate('Evolução Temporal - Agentes Wazuh Online e Offline') }}</h3>
+                <h3 class="detailed-title">{{ translate('Evolução Temporal - Disponibilidade Observada') }}</h3>
                 <i class="fas fa-grip-vertical drag-grip" title="{{ translate('Arraste para reorganizar') }}"></i>
             </div>
             <div class="chart-container" style="height: 300px;"><div class="echart" id="chartTimeline"></div></div>

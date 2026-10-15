@@ -559,6 +559,64 @@ def ingest_observation(source: str, external_id: str, raw_data: dict,
     return asset
 
 
+def reconcile_source_snapshot(source: str, seen_external_ids) -> dict:
+    """Reconcile the current-state rows of a full-snapshot source.
+
+    Historical observations/snapshots are retained. Only AssetSourceState is
+    removed for identities absent from the latest successful source snapshot.
+    Assets with no remaining current source become inactive; multi-source
+    assets are recomputed from their remaining sources.
+    """
+    source=_text(source).lower()
+    seen={_text(x) for x in (seen_external_ids or []) if _text(x)}
+    rows=AssetSourceState.query.filter_by(source=source).all()
+    stale=[row for row in rows if _text(row.external_id) not in seen]
+    affected={row.asset_id for row in stale}
+
+    for row in stale:
+        db.session.delete(row)
+    db.session.flush()
+
+    deactivated=0
+    refreshed=0
+    for asset_id in affected:
+        asset=Asset.query.get(asset_id)
+        if not asset:
+            continue
+        remaining=AssetSourceState.query.filter_by(asset_id=asset_id).all()
+        if not remaining:
+            asset.active=False
+            deactivated+=1
+            continue
+
+        canonical=_canonical_from_sources(asset_id)
+        asset.current_state=canonical
+        asset.canonical_name=(canonical.get('hostname')
+                              or canonical.get('ip_address')
+                              or asset.canonical_name)
+        asset.status=canonical.get('device_status') or 'Desconhecido'
+        asset.agent_status=canonical.get('agent_status') or 'unknown'
+        asset.network_status=canonical.get('network_status') or 'unknown'
+        asset.confidence=max(
+            [float(r.confidence or 0) for r in remaining] or [0.5])
+        asset.last_observed_at=max(
+            [r.observed_at for r in remaining if r.observed_at]
+            or [asset.last_observed_at])
+        asset.last_seen=max(
+            [r.last_seen for r in remaining if r.last_seen]
+            or [asset.last_seen])
+        asset.active=True
+        refreshed+=1
+
+    db.session.commit()
+    return {
+        'source': source,
+        'stale_source_states_removed': len(stale),
+        'assets_deactivated': deactivated,
+        'assets_refreshed': refreshed,
+    }
+
+
 def refresh_asset_liveness(now=None):
     import os
     now=now or utcnow()
@@ -589,14 +647,24 @@ def sync_netscope_assets() -> dict:
     from services.netscope_core import store
     observed = 0
     errors = 0
+    seen = []
     for dev in store.active():
         try:
+            external_id = _text(
+                dev.get('uid') or dev.get('mac') or dev.get('ip'))
             ingest_netscope_device(dev)
+            if external_id:
+                seen.append(external_id)
             observed += 1
         except Exception:
             db.session.rollback()
             errors += 1
-    return {'observed': observed, 'errors': errors}
+
+    reconciled = {}
+    if errors == 0:
+        reconciled = reconcile_source_snapshot('netscope', seen)
+    return {'observed': observed, 'errors': errors,
+            'reconciled': reconciled}
 
 
 def record_source_state(source: str, *, enabled: bool = True, status: str = 'ok',

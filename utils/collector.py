@@ -107,6 +107,12 @@ class WazuhCollector:
                 self.logger.error(f'[Coletor] Falha ao obter JSON de {url}: {e}')
             return {}
 
+    def get_json_strict(self, endpoint):
+        """Mandatory JSON request: transport/HTTP/JSON failures propagate."""
+        url = f"{self.base_url}/{endpoint}"
+        resp = self._request('GET', url, timeout=30)
+        return resp.json()
+
     @staticmethod
     def _clean_data(obj):
 
@@ -156,7 +162,11 @@ class WazuhCollector:
         total = None
         while True:
             url = f"agents?select={select}&limit={page_size}&offset={offset}"
-            data = self.get_json(url).get('data', {}) or {}
+            payload = self.get_json_strict(url)
+            if not isinstance(payload, dict) or 'data' not in payload:
+                raise RuntimeError(
+                    'Resposta inválida da API Wazuh ao listar agentes')
+            data = payload.get('data', {}) or {}
             items = data.get('affected_items', []) or []
             agents.extend(items)
             if total is None:
@@ -289,6 +299,24 @@ def _sync_wazuh_only(app, force=False):
                     logger.error(f"[Coletor] Erro ao processar detalhe de agente: {e}")
 
         try:
+            # Reconcile a full Wazuh snapshot only when every agent detail
+            # completed successfully. Partial/API-failed cycles must never
+            # expire current agents.
+            wazuh_reconcile = {'skipped': True, 'reason': 'partial-cycle'}
+            if error_count == 0:
+                from services.asset_core import reconcile_source_snapshot
+                wazuh_reconcile = reconcile_source_snapshot(
+                    'wazuh', [str(x or '') for x in found_agent_ids])
+                logger.info(
+                    "[Coletor] Asset Core Wazuh reconciliado: %s",
+                    wazuh_reconcile
+                )
+            else:
+                logger.warning(
+                    "[Coletor] Reconciliação Wazuh não executada: "
+                    "%s erro(s) no ciclo.", error_count
+                )
+
             unseen_hosts = []
             if _env_bool('LEGACY_HOST_MIRROR', False):
                 unseen_hosts = HostInventory.query.filter(~HostInventory.hostname.in_(found_hostnames), HostInventory.is_legacy == False).all()

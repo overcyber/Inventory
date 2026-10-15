@@ -11,18 +11,6 @@ __version__ = '0.19.0-inventory'
 def init_netscope(app: Flask):
     _migrate_schema_v010(app)
 
-    try:
-        with app.app_context():
-            from services.netscope_wazuh_bridge import sync_from_inventory
-            sync_from_inventory(app)
-            from services.asset_core import sync_netscope_assets
-            sync_netscope_assets()
-    except Exception as e:
-        try:
-            app.logger.warning(f"[NetScope] Sincronização inicial pulada: {e}")
-        except Exception:
-            pass
-
     background = (os.getenv('NETSCOPE_BACKGROUND_ENABLED', 'true')
                   .strip().lower() in ('1', 'true', 'yes', 'on', 'sim'))
     if background:

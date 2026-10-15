@@ -38,7 +38,18 @@ class NetScopeSource(InventorySource):
     name='netscope'
     def enabled(self): return env_bool('NETSCOPE_SOURCE_ENABLED',True)
     def collect(self,app):
-        r=sync_netscope_assets(); return SourceResult(self.name,r['observed'],r['errors'],detail=r)
+        # Run the mutable Wazuh↔NetScope bridge in the scheduler, not once per
+        # Gunicorn worker. This avoids races and duplicate startup mutations.
+        try:
+            from services.netscope_wazuh_bridge import sync_from_inventory
+            bridge = sync_from_inventory(app)
+        except Exception as exc:
+            app.logger.warning('[NetScope] ponte Wazuh no scheduler falhou: %s', exc)
+            bridge = {'error': str(exc)}
+        r=sync_netscope_assets()
+        detail=dict(r)
+        detail['wazuh_bridge']=bridge
+        return SourceResult(self.name,r['observed'],r['errors'],detail=detail)
 
 class OsquerySource(InventorySource):
     name='osquery'
@@ -641,4 +652,13 @@ def sync_configured_sources(app, only=None, enabled_overrides=None):
                 pass
             app.logger.exception('[Source:%s] %s',src.name,exc)
             summary[src.name]={'error':str(exc)}
+    try:
+        from utils import cache as shared_cache
+        shared_cache.invalidate('machines', 'stats')
+        if hasattr(app, 'MACHINES_CACHE'):
+            app.MACHINES_CACHE = {'data': None, 'last_update': 0}
+        if hasattr(app, 'STATS_CACHE'):
+            app.STATS_CACHE = {'data': None, 'last_update': 0}
+    except Exception:
+        pass
     return summary

@@ -30,6 +30,7 @@ def dashboard():
     stats = get_cached_stats()
 
     ns_total = ns_with_agent = ns_without_agent = ns_agent_exempt = 0
+    ns_agent_online = ns_agent_offline = ns_agent_unknown = 0
     try:
         from services.netscope_core import store
         ns_stats = store.stats()
@@ -37,6 +38,9 @@ def dashboard():
         ns_with_agent = ns_stats.get('with_agent', 0)
         ns_without_agent = ns_stats.get('without_agent', 0)
         ns_agent_exempt = ns_stats.get('agent_exempt', 0)
+        ns_agent_online = ns_stats.get('agent_online', 0)
+        ns_agent_offline = ns_stats.get('agent_offline', 0)
+        ns_agent_unknown = ns_stats.get('agent_unknown', 0)
     except Exception as e:
         app.logger.debug(f"[Dashboard] NetScope stats indisponíveis: {e}")
 
@@ -54,8 +58,9 @@ def dashboard():
 
     return render_template('dashboard.html',
                            stats=stats,
-                           active_count=stats['status']['Ativo'],
-                           inactive_count=stats['status']['Inativo'],
+                           active_count=ns_agent_online,
+                           inactive_count=ns_agent_offline,
+                           agent_unknown_count=ns_agent_unknown,
                            ns_total=ns_total,
                            ns_with_agent=ns_with_agent,
                            ns_without_agent=ns_without_agent,

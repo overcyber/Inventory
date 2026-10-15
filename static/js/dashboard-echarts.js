@@ -48,7 +48,7 @@ const T = Object.assign({
     withAgentWazuh: 'Com agente Wazuh', withoutAgentWazuh: 'Sem agente Wazuh',
     protectedDevices: 'dispositivos protegidos',
 
-    activeMachines: 'Agentes Wazuh Online', inactiveMachines: 'Agentes Wazuh Offline',
+    activeMachines: 'Ativos observados', inactiveMachines: 'Inativos observados',
     noData: 'Sem dados', notIdentified: 'Não identificado',
 
     agentsActive: 'Agentes Ativos', agentsDisconnected: 'Agentes Desconectados',

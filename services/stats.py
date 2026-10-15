@@ -101,7 +101,8 @@ def get_cached_machines():
         app.MACHINES_CACHE['last_update'] = time.time()
         return shared
 
-    if app.MACHINES_CACHE['data'] is not None:
+    if (app.MACHINES_CACHE['data'] is not None
+            and (time.time() - app.MACHINES_CACHE['last_update']) <= CACHE_TIMEOUT):
         return app.MACHINES_CACHE['data']
 
     machines = get_all_machines()
@@ -196,12 +197,45 @@ def build_chart_response(stats, machines):
 
     ns_types = {}
     ns_total = ns_with_agent = ns_without_agent = ns_agent_exempt = 0
+    ns_agent_online = ns_agent_offline = ns_agent_unknown = 0
+    agent_status_detail = {'active': 0, 'disconnected': 0, 'never_connected': 0}
+    keepalive_buckets = {'today': 0, 'week': 0, 'month': 0, 'old': 0}
+    now_dt = datetime.now()
     try:
         from services.netscope_core import store as _ns_store
         for d in _ns_store.active():
             ns_total += 1
             if d.get('has_agent'):
                 ns_with_agent += 1
+                raw_st = str(d.get('agent_status') or '').strip().lower()
+                if raw_st == 'active':
+                    ns_agent_online += 1
+                    agent_status_detail['active'] += 1
+                elif raw_st == 'never_connected':
+                    ns_agent_offline += 1
+                    agent_status_detail['never_connected'] += 1
+                elif raw_st in ('disconnected', 'offline'):
+                    ns_agent_offline += 1
+                    agent_status_detail['disconnected'] += 1
+                else:
+                    ns_agent_unknown += 1
+
+                ls = d.get('agent_last_keepalive')
+                if ls:
+                    try:
+                        m_dt = datetime.fromisoformat(
+                            str(ls).replace('Z', '+00:00')).replace(tzinfo=None)
+                        age_days = (now_dt - m_dt).days
+                        if age_days <= 0:
+                            keepalive_buckets['today'] += 1
+                        elif age_days <= 7:
+                            keepalive_buckets['week'] += 1
+                        elif age_days <= 30:
+                            keepalive_buckets['month'] += 1
+                        else:
+                            keepalive_buckets['old'] += 1
+                    except (ValueError, TypeError):
+                        pass
             elif d.get('agent_exempt'):
                 ns_agent_exempt += 1
             else:
@@ -211,33 +245,8 @@ def build_chart_response(stats, machines):
     except Exception as e:
         app.logger.debug(f"[Dashboard] NetScope extra indisponível: {e}")
 
-    agent_status_detail = {'active': 0, 'disconnected': 0, 'never_connected': 0}
-    keepalive_buckets = {'today': 0, 'week': 0, 'month': 0, 'old': 0}
     ram_usage_list = []
-    now_dt = datetime.now()
     for m in machines:
-        raw_st = str(m.get('agent_status_raw', '')).strip().lower()
-        if raw_st in agent_status_detail:
-            agent_status_detail[raw_st] += 1
-        elif raw_st and raw_st != 'unknown':
-            agent_status_detail['disconnected'] += 1
-
-        ls = m.get('last_seen')
-        if ls and isinstance(ls, str) and ls != 'N/A':
-            try:
-                m_dt = datetime.fromisoformat(ls.replace('Z', '+00:00')).replace(tzinfo=None)
-                age_days = (now_dt - m_dt).days
-                if age_days <= 0:
-                    keepalive_buckets['today'] += 1
-                elif age_days <= 7:
-                    keepalive_buckets['week'] += 1
-                elif age_days <= 30:
-                    keepalive_buckets['month'] += 1
-                else:
-                    keepalive_buckets['old'] += 1
-            except (ValueError, TypeError):
-                continue
-
         ru = m.get('ram_usage')
         if isinstance(ru, (int, float)) and m.get('hostname'):
             ram_usage_list.append({
@@ -265,8 +274,9 @@ def build_chart_response(stats, machines):
         'port_protocols': port_protocols,
         'process_labels': process_labels,
         'process_data': process_data,
-        'active_count': stats.get('status', {}).get('Ativo', 0),
-        'inactive_count': stats.get('status', {}).get('Inativo', 0),
+        'active_count': ns_agent_online,
+        'inactive_count': ns_agent_offline,
+        'agent_unknown_count': ns_agent_unknown,
         'last_update': [m.get('last_seen', 0) for m in machines[:5]],
         'groups': groups_data,
         'timeline_dates': timeline_data['dates'],
@@ -285,6 +295,9 @@ def build_chart_response(stats, machines):
         'ns_with_agent': ns_with_agent,
         'ns_without_agent': ns_without_agent,
         'ns_agent_exempt': ns_agent_exempt,
+        'ns_agent_online': ns_agent_online,
+        'ns_agent_offline': ns_agent_offline,
+        'ns_agent_unknown': ns_agent_unknown,
         'ns_agent_coverage': round(
             100.0 * ns_with_agent / (ns_with_agent + ns_without_agent), 1
         ) if (ns_with_agent + ns_without_agent) else 0,

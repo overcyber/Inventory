@@ -181,6 +181,10 @@ html.dark-mode {
     color: var(--info);
 }
 
+#ns-root .stat-num.unverified {
+    color: var(--warning);
+}
+
 #ns-root .stat-label {
     font-size: .55rem;
     font-weight: 600;
