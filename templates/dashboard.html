@@ -507,14 +507,14 @@ input, textarea, select {
                 <div class="kpi-title">{{ translate('Agentes Wazuh Online') }}</div>
                 <div class="kpi-icon green"><i class="fas fa-check-circle"></i></div>
             </div>
-            <div class="kpi-value" id="kpi-online">{{ active_count }}</div>
+            <div class="kpi-value" id="kpi-online">{{ active_count if wazuh_enabled else "Desabilitado" }}</div>
         </div>
         <div class="kpi-card" data-card="kpi-agents-offline" onclick="window.location.href='/netscope?filter=agent'">
             <div class="kpi-header">
                 <div class="kpi-title">{{ translate('Agentes Wazuh Offline') }}</div>
                 <div class="kpi-icon orange"><i class="fas fa-times-circle"></i></div>
             </div>
-            <div class="kpi-value" id="kpi-offline">{{ inactive_count }}</div>
+            <div class="kpi-value" id="kpi-offline">{{ inactive_count if wazuh_enabled else "Desabilitado" }}</div>
         </div>
 
         <div class="kpi-card" data-card="kpi-with-agent" onclick="window.location.href='/search'">
