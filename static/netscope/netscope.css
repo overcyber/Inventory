@@ -145,17 +145,21 @@ html.dark-mode {
 }
 
 #ns-root .stats-bar {
-    display: flex;
-    gap: 0;
-    padding: 0;
+    display: grid;
+    /* grid adaptativo: 2-3 colunas conforme a largura da sidebar (200-500px),
+       cada item com espaco suficiente para o rotulo em uma linha */
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    gap: .15rem;
+    padding: .3rem .4rem .4rem;
     border-bottom: 1px solid var(--light-gray);
 }
 
 #ns-root .stat-item {
-    flex: 1;
     text-align: center;
-    padding: .35rem .25rem;
-    border-right: 1px solid var(--light-gray);
+    padding: .35rem .2rem;
+    min-width: 0;
+    border-right: none;
+    border-radius: 8px;
 }
 
 #ns-root .stat-item:last-child {
@@ -191,6 +195,9 @@ html.dark-mode {
     color: var(--gray);
     text-transform: uppercase;
     letter-spacing: .04em;
+    line-height: 1.15;
+    margin-top: .1rem;
+    overflow-wrap: break-word;
 }
 
 #ns-root .sidebar-section {
