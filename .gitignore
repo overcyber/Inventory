@@ -21,3 +21,9 @@ ssl/ca-key.pem
 ssl/*.invalid.*
 .backups/
 *.bak
+
+# nunca versionar: backups do .env (SEGREDOS), logs e certificados locais
+.env.bak
+.env.bak-*
+logs/*.log
+ssl/ca.pem
