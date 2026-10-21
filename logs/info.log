@@ -48,3 +48,40 @@
 2026-09-11 20:27:57,714 - INFO - [NetScope] Ponte Wazuh automática pós-scan: 12 hosts, 12 casados, 0 criados, 0 duplicatas mescladas.
 2026-09-11 20:56:01,001 - ERROR - Erro 404 - IP: 192.168.0.13, Usuário: admin, Endpoint: None
 2026-09-11 21:05:11,274 - ERROR - Erro 404 - IP: 192.168.0.13, Usuário: admin, Endpoint: None
+2026-10-21 14:17:59,643 - INFO - [NetScope] Threads internas desabilitadas; discovery worker externo.
+2026-10-21 14:17:59,659 - INFO - [NetScope] Módulo NetScope inicializado (PostgreSQL + Asset Core).
+2026-10-21 14:18:01,107 - INFO - [Notificações] avaliação inicial: 0 novo(s) alerta(s), regras: {}
+2026-10-21 14:18:16,737 - INFO - [NetScope] Ponte Wazuh concluída: 13 hosts, 13 com agente casados, 0 criados, 20 sem agente, 0 duplicatas mescladas.
+2026-10-21 14:18:16,739 - INFO - [NetScope] Ponte Wazuh automática pós-scan: 13 hosts, 13 casados, 0 criados, 0 duplicatas mescladas.
+2026-10-21 14:18:28,681 - INFO - [Notificações] pós-scan: 21 novo(s) alerta(s) — {'new_device': 20, 'agent_coverage': 1}
+2026-10-21 14:18:28,715 - INFO - [Discovery] scan periódico: {'scanned': 1, 'new': 20, 'total': 31, 'errors': [], 'warnings': [], 'ping_found': 31, 'tcp_found': 0, 'tcp_probed': 2, 'ip_duplicates_reconciled': 0, 'arp_found': 0, 'wazuh_synced': True, 'asset_core': {'observed': 33, 'errors': 0, 'reconciled': {'source': 'netscope', 'stale_source_states_removed': 0, 'assets_deactivated': 0, 'assets_refreshed': 0}}}
+2026-10-21 14:52:04,551 - INFO - [NetScope] Threads internas desabilitadas; discovery worker externo.
+2026-10-21 14:52:04,551 - INFO - [NetScope] Módulo NetScope inicializado (PostgreSQL + Asset Core).
+2026-10-21 14:52:05,916 - INFO - [Notificações] avaliação inicial: 0 novo(s) alerta(s), regras: {}
+2026-10-21 14:52:23,861 - INFO - [NetScope] Ponte Wazuh concluída: 13 hosts, 13 com agente casados, 0 criados, 20 sem agente, 0 duplicatas mescladas.
+2026-10-21 14:52:23,861 - INFO - [NetScope] Ponte Wazuh automática pós-scan: 13 hosts, 13 casados, 0 criados, 0 duplicatas mescladas.
+2026-10-21 14:52:49,913 - INFO - [Discovery] scan periódico: {'scanned': 1, 'new': 0, 'total': 31, 'errors': [], 'warnings': [], 'ping_found': 31, 'tcp_found': 0, 'tcp_probed': 2, 'ip_duplicates_reconciled': 0, 'arp_found': 0, 'wazuh_synced': True, 'asset_core': {'observed': 33, 'errors': 0, 'reconciled': {'source': 'netscope', 'stale_source_states_removed': 0, 'assets_deactivated': 0, 'assets_refreshed': 0}}}
+2026-10-21 15:08:44,020 - INFO - [NetScope] Threads internas desabilitadas; discovery worker externo.
+2026-10-21 15:08:44,020 - INFO - [NetScope] Módulo NetScope inicializado (PostgreSQL + Asset Core).
+2026-10-21 15:08:45,230 - INFO - [Notificações] avaliação inicial: 0 novo(s) alerta(s), regras: {}
+2026-10-21 15:09:04,300 - INFO - [NetScope] Ponte Wazuh concluída: 13 hosts, 13 com agente casados, 0 criados, 21 sem agente, 0 duplicatas mescladas.
+2026-10-21 15:09:04,301 - INFO - [NetScope] Ponte Wazuh automática pós-scan: 13 hosts, 13 casados, 0 criados, 0 duplicatas mescladas.
+2026-10-21 15:09:33,201 - INFO - [Notificações] pós-scan: 3 novo(s) alerta(s) — {'new_device': 1, 'duplicates': 1, 'ip_conflict': 1}
+2026-10-21 15:09:33,640 - INFO - [Discovery] scan periódico: {'scanned': 1, 'new': 1, 'total': 31, 'errors': [], 'warnings': [], 'ping_found': 31, 'tcp_found': 0, 'tcp_probed': 2, 'ip_duplicates_reconciled': 0, 'arp_found': 0, 'wazuh_synced': True, 'asset_core': {'observed': 34, 'errors': 0, 'reconciled': {'source': 'netscope', 'stale_source_states_removed': 0, 'assets_deactivated': 0, 'assets_refreshed': 0}}}
+2026-10-21 15:26:10,692 - INFO - [NetScope] Threads internas desabilitadas; discovery worker externo.
+2026-10-21 15:26:10,692 - INFO - [NetScope] Módulo NetScope inicializado (PostgreSQL + Asset Core).
+2026-10-21 15:26:11,508 - INFO - [Notificações] avaliação inicial: 0 novo(s) alerta(s), regras: {}
+2026-10-21 15:26:30,404 - INFO - [NetScope] Ponte Wazuh concluída: 13 hosts, 14 com agente casados, 0 criados, 22 sem agente, 1 duplicatas mescladas.
+2026-10-21 15:26:30,405 - INFO - [NetScope] Ponte Wazuh automática pós-scan: 13 hosts, 14 casados, 0 criados, 1 duplicatas mescladas.
+2026-10-21 15:27:03,871 - INFO - [Notificações] pós-scan: 1 novo(s) alerta(s) — {'new_device': 1}
+2026-10-21 15:27:03,897 - INFO - [Discovery] scan periódico: {'scanned': 1, 'new': 2, 'total': 31, 'errors': [], 'warnings': [], 'ping_found': 31, 'tcp_found': 0, 'tcp_probed': 2, 'ip_duplicates_reconciled': 0, 'arp_found': 0, 'wazuh_synced': True, 'asset_core': {'observed': 35, 'errors': 0, 'reconciled': {'source': 'netscope', 'stale_source_states_removed': 0, 'assets_deactivated': 0, 'assets_refreshed': 0}}}
+2026-10-21 16:09:11,124 - INFO - [NetScope] Ponte Wazuh concluída: 13 hosts, 13 com agente casados, 0 criados, 22 sem agente, 0 duplicatas mescladas.
+2026-10-21 16:09:11,125 - INFO - [NetScope] Ponte Wazuh automática pós-scan: 13 hosts, 13 casados, 0 criados, 0 duplicatas mescladas.
+2026-10-21 16:09:18,045 - INFO - [Discovery] scan manual concluído: {'scanned': 1, 'new': 0, 'total': 31, 'errors': [], 'warnings': [], 'ping_found': 31, 'tcp_found': 0, 'tcp_probed': 2, 'ip_duplicates_reconciled': 0, 'arp_found': 0, 'wazuh_synced': True, 'asset_core': {'observed': 35, 'errors': 0, 'reconciled': {'source': 'netscope', 'stale_source_states_removed': 0, 'assets_deactivated': 0, 'assets_refreshed': 0}}}
+2026-10-21 17:55:13,297 - INFO - [NetScope] Ponte Wazuh concluída: 13 hosts, 13 com agente casados, 0 criados, 23 sem agente, 0 duplicatas mescladas.
+2026-10-21 17:55:13,315 - INFO - [NetScope] Ponte Wazuh automática pós-scan: 13 hosts, 13 casados, 0 criados, 0 duplicatas mescladas.
+2026-10-21 17:55:20,184 - INFO - [Notificações] pós-scan: 1 novo(s) alerta(s) — {'new_device': 1}
+2026-10-21 17:55:20,190 - INFO - [Discovery] scan manual concluído: {'scanned': 1, 'new': 1, 'total': 32, 'errors': [], 'warnings': [], 'ping_found': 31, 'tcp_found': 0, 'tcp_probed': 2, 'ip_duplicates_reconciled': 0, 'arp_found': 1, 'wazuh_synced': True, 'asset_core': {'observed': 36, 'errors': 0, 'reconciled': {'source': 'netscope', 'stale_source_states_removed': 0, 'assets_deactivated': 0, 'assets_refreshed': 0}}}
+2026-10-21 18:34:25,212 - INFO - [NetScope] Ponte Wazuh concluída: 13 hosts, 13 com agente casados, 0 criados, 23 sem agente, 0 duplicatas mescladas.
+2026-10-21 18:34:25,212 - INFO - [NetScope] Ponte Wazuh automática pós-scan: 13 hosts, 13 casados, 0 criados, 0 duplicatas mescladas.
+2026-10-21 18:34:32,432 - INFO - [Discovery] scan manual concluído: {'scanned': 1, 'new': 0, 'total': 32, 'errors': [], 'warnings': [], 'ping_found': 32, 'tcp_found': 0, 'tcp_probed': 2, 'ip_duplicates_reconciled': 0, 'arp_found': 0, 'wazuh_synced': True, 'asset_core': {'observed': 36, 'errors': 0, 'reconciled': {'source': 'netscope', 'stale_source_states_removed': 0, 'assets_deactivated': 0, 'assets_refreshed': 0}}}
