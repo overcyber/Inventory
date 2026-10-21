@@ -25,14 +25,32 @@ def _extract_host_info(host):
     raw_agent=state.get('raw_agent_info',{}) or {}
     agent_id=str(state.get('wazuh_agent_id') or getattr(host,'external_id','') or '')
     macs=[]
+    from services.asset_core import _is_virtual_iface
     for mac in state.get('macs') or []:
         mac=(mac or '').strip().lower()
         if mac and mac not in macs: macs.append(mac)
+    ifaces=[]
     for nif in inv.get('netiface',[]) or []:
+        # interfaces virtuais (veth/tun/docker/...) nao identificam o ativo:
+        # suas MACs mudam a cada boot e poluem o NetScope com "maquinas" falsas
+        if _is_virtual_iface(nif.get('name')):
+            continue
+        ifaces.append(nif)
         mac=(nif.get('mac') or '').strip().lower()
         if mac and mac not in ('n/a','00:00:00:00:00:00','unknown') and mac not in macs:
             macs.append(mac)
-    ips=[x for x in (state.get('ips') or []) if x and x not in ('127.0.0.1','::1')]
+    def _real_addr(x):
+        value=_text_addr(x)
+        if not value: return False
+        if value.startswith('172.') and any(value.startswith(f'172.{o}.') for o in range(16,32)): return False
+        if value.startswith('169.254.') or value.lower().startswith(('fe80:','fc','fd')): return False
+        return True
+    def _text_addr(x):
+        return str((x or {}).get('address') if isinstance(x,dict) else (x or '')).strip()
+    addresses=[a for a in (inv.get('netaddr') or []) if _real_addr(a)]
+    ips=[x for x in (state.get('ips') or []) if x and x not in ('127.0.0.1','::1')
+         and not (str(x).startswith('172.') and any(str(x).startswith(f'172.{o}.') for o in range(16,32)))
+         and not str(x).startswith(('169.254.','fe80:','fe80::'))]
     ip=state.get('ip_address') or (ips[0] if ips else '')
     hostname=(state.get('hostname') or '').strip()
     os_name=state.get('os_name') or ''
@@ -52,8 +70,8 @@ def _extract_host_info(host):
         'last_keepalive':str(state.get('last_seen') or ''),
         'groups':state.get('groups') or [],
         'macs':macs,
-        'interfaces':inv.get('netiface') or [],
-        'addresses':inv.get('netaddr') or [],
+        'interfaces':ifaces,
+        'addresses':addresses,
         'hostname':hostname,'os':str(os_name).strip(),'os_platform':os_platform,
     }
 
@@ -68,7 +86,13 @@ def _apply_agent_fields(dev, info, fill_doc=True):
     dev['agent_ip'] = info['agent_ip']
     for ip in info.get('ips') or []:
         add_device_ip(dev, ip, primary=False)
-    for mac in info.get('macs') or []:
+    # MACs do agente (interfaces reais, sem veth/tun/docker) sao a fonte autoritativa
+    # do host com agente: SUBSTITUI a lista historica para remover lixo de interfaces
+    # virtuais acumulado antes do filtro (113 MACs "aleatorias" num mesmo ativo).
+    agent_macs = list(info.get('macs') or [])
+    if agent_macs:
+        dev['macs'] = agent_macs
+    for mac in agent_macs:
         add_device_mac(dev, mac, primary=False)
     if info.get('interfaces'):
         dev['interfaces'] = info['interfaces']

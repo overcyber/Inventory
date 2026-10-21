@@ -130,6 +130,9 @@ services:
       REDIS_URL: redis://127.0.0.1:${REDIS_HOST_PORT:-16379}/0
       INVENTORY_SCHEDULER_ENABLED: "false"
       NETSCOPE_BACKGROUND_ENABLED: "false"
+      # unica execucao com rede do host: apenas ela pode usar o cache ARP na
+      # regra de conflito de MAC (evita "maquinas" fantasma das bridges Docker)
+      NETSCOPE_ARP_CONFLICTS: "1"
     user: "0:0"
     cap_drop: [ALL]
     cap_add: [NET_RAW]

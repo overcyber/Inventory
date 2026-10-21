@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 import hashlib
 import json
+import os
 import threading
 
 SETTINGS_KEY = 'notifications'
@@ -367,49 +368,68 @@ def _mac_conflict_groups():
 
     groups = {}
 
-    def _add(mac, ip, name=''):
+    def _add(mac, ip, name='', owner=''):
         mac = (mac or '').strip().lower()
         ip = (ip or '').strip()
         if not mac or mac == '00:00:00:00:00:00' or not ip:
             return
         if ip in ('127.0.0.1', 'localhost', '::1', '0.0.0.0'):
             return
-        g = groups.setdefault(mac, {'mac': mac, 'ips': [], 'names': []})
+        g = groups.setdefault(mac, {'mac': mac, 'ips': [], 'names': [], 'owners': set()})
         if ip not in g['ips']:
             g['ips'].append(ip)
+        if owner:
+            g['owners'].add(owner)
         if name and name not in g['names']:
             g['names'].append(name)
 
-    try:
-        from services.netscope_discovery import read_arp_table
-        own_macs = set()
+    # O cache ARP so faz sentido no worker com network_mode: host (NETSCOPE_ARP_CONFLICTS=1).
+    # Nos containers web/scheduler, /proc/net/arp traz vizinhos da bridge Docker - isso ja
+    # gerou "conflitos de MAC" fantasma com maquinas que nao existem (172.x do proprio host).
+    if os.getenv('NETSCOPE_ARP_CONFLICTS') == '1':
         try:
-            from pathlib import Path as _Path
-            net_dir = _Path('/sys/class/net')
-            if net_dir.is_dir():
-                for iface in net_dir.iterdir():
-                    try:
-                        own_macs.add(
-                            (iface / 'address').read_text().strip().lower())
-                    except (IOError, OSError):
-                        pass
+            from services.netscope_discovery import read_arp_table
+            from services.netscope_engine import load_config as _ns_cfg
+            own_macs = set()
+            try:
+                from pathlib import Path as _Path
+                net_dir = _Path('/sys/class/net')
+                if net_dir.is_dir():
+                    for iface in net_dir.iterdir():
+                        try:
+                            own_macs.add(
+                                (iface / 'address').read_text().strip().lower())
+                        except (IOError, OSError):
+                            pass
+            except Exception:
+                pass
+            prefixes = []
+            try:
+                for net in (_ns_cfg().get('networks') or []):
+                    sub = _text(net.get('subnet') or net.get('cidr') or '')
+                    if sub:
+                        prefixes.append(str(sub).split('/')[0])
+            except Exception:
+                pass
+            for ip, mac in (read_arp_table() or {}).items():
+                if str(mac).lower() in own_macs:
+                    continue
+                # apenas IPs das redes monitoradas configuradas no NetScope
+                if prefixes and not any(ip.startswith(p) for p in prefixes):
+                    continue
+                _add(mac, ip, owner='arp')
         except Exception:
             pass
-        for ip, mac in (read_arp_table() or {}).items():
-            if str(mac).lower() in own_macs:
-                continue
-            _add(mac, ip)
-    except Exception:
-        pass
 
     try:
         from models import Asset
         for asset in Asset.query.filter_by(active=True).all():
             state=asset.current_state or {}
             ips=state.get('ips') or ([state.get('ip_address')] if state.get('ip_address') else [])
+            owner=f"asset:{asset.asset_uuid}"
             for mac in state.get('macs') or []:
                 for ip in ips:
-                    _add(mac,ip,state.get('hostname') or asset.canonical_name)
+                    _add(mac,ip,state.get('hostname') or asset.canonical_name,owner)
     except Exception:
         pass
 
@@ -417,11 +437,19 @@ def _mac_conflict_groups():
         from services.netscope_core import store
         for grp in store.mac_conflicts() or []:
             for d in grp.get('devices', []):
-                _add(grp.get('mac'), d.get('ip'), d.get('name') or '')
+                _add(grp.get('mac'), d.get('ip'), d.get('name') or '', owner='netscope')
     except Exception:
         pass
 
-    return [g for g in groups.values() if len(g['ips']) >= 2]
+    # Conflito real = a mesma MAC em 2+ IPs vindos de DONOS DIFERENTES
+    # (ex.: VM clonada em outro ativo). A mesma MAC nos varios IPs do
+    # PROPRIO ativo (multihoming: LAN + VPN) nao e conflito.
+    out = []
+    for g in groups.values():
+        if len(g['ips']) >= 2 and len(g['owners']) >= 2:
+            g['owners'] = len(g['owners'])
+            out.append(g)
+    return out
 
 def _net_rules(prefs, today):
     created = {}
@@ -516,11 +544,11 @@ def _net_rules(prefs, today):
         try:
             for grp in _mac_conflict_groups():
                 n_ips = len(grp['ips'])
+                names = grp.get('names') or []
+                # exibe ate 4 IPs SEM truncar quando ha menos nomes que IPs (bug do zip)
                 disp = ', '.join(
-                    f"{ip}{(' (' + n + ')') if n else ''}"
-                    for ip, n in zip(
-                        grp['ips'][:4],
-                        (grp.get('names') or [''] * 4)[:4]))
+                    f"{ip}{(' (' + names[i] + ')') if i < len(names) and names[i] else ''}"
+                    for i, ip in enumerate(grp['ips'][:4]))
                 if _emit('mac_conflict', 'security', 'warning',
                          f"mac_conflict:{grp['mac']}",
                          {'mac': grp['mac'], 'n': str(n_ips),

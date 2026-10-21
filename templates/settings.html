@@ -67,6 +67,42 @@
     {% if session.role == 'admin' %}
     <div class="settings-card">
         <div class="settings-card-header">
+            <i class="fas fa-plug"></i>
+            <h3>{{ translate('API do Asset Core (Integrações)') }}</h3>
+        </div>
+        <div class="settings-card-body">
+            <p>{{ translate('Integração máquina-a-máquina com o Aegis SOAR e outras ferramentas. Envie o token no header Authorization: Bearer ou X-Inventory-Token.') }}</p>
+            <div style="margin: 10px 0;">
+                <div style="font-size: 12px; opacity: .7;">{{ translate('URL base') }}</div>
+                <code style="word-break: break-all;">{{ request.host_url.rstrip('/') }}</code>
+            </div>
+            <div style="margin: 10px 0;">
+                <div style="font-size: 12px; opacity: .7;">{{ translate('Token de integração') }} <span class="badge" style="opacity:.7;">{{ api_cfg.scopes }}</span></div>
+                <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
+                    <code id="api-token-value" style="word-break: break-all; user-select: all;">{{ ('••••••••' + api_cfg.token[-4:]) if api_cfg.token else '—' }}</code>
+                    <input type="hidden" id="api-token-raw" value="{{ api_cfg.token }}">
+                    <button type="button" class="btn btn-sm" onclick="var r=document.getElementById('api-token-raw').value; document.getElementById('api-token-value').textContent=r||'—'">
+                        <i class="fas fa-eye"></i> {{ translate('Mostrar') }}
+                    </button>
+                    <button type="button" class="btn btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('api-token-raw').value||''); this.innerHTML='<i class=\'fas fa-check\'></i> {{ translate('Copiado!') }}'">
+                        <i class="fas fa-copy"></i> {{ translate('Copiar') }}
+                    </button>
+                </div>
+            </div>
+            <div style="margin: 10px 0; font-size: 12px; opacity: .75;">
+                {{ translate('Endpoints') }}:
+                <code>GET /api/v1/assets</code>,
+                <code>GET /api/v1/assets/<uuid></code>,
+                <code>GET /api/v1/sources</code>,
+                <code>POST /api/v1/assets/observations[/batch]</code>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if session.role == 'admin' %}
+    <div class="settings-card">
+        <div class="settings-card-header">
             <i class="fas fa-robot"></i>
             <h3>{{ translate('Assistente & Notificações') }}</h3>
         </div>

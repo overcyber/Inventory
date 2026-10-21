@@ -28,6 +28,18 @@ def normalize_hostname(value: Any) -> str:
     return _text(value).rstrip('.').upper()
 
 
+# Interfaces virtuais (Docker/K8s/VPN/tun): MACs aleatorias que mudam a cada boot e
+# nao identificam o ativo. Sem este filtro, um host com containers vira "110 MACs" e
+# polui a regra de conflito de MAC com centenas de conflitos falsos.
+_VIRTUAL_IFACE_RE = re.compile(
+    r'^(veth[\w.-]*|tun\w*|tap\w*|wg\d+|docker\d*|br-[0-9a-f]+|virbr\d*|zt\w+|lo\b|dummy\w*|ifb\d+|macvlan\w*|ipvlan\w*|cali\w*|flannel\w*|cni\w*|nodelocaldns\w*)$',
+    re.IGNORECASE)
+
+
+def _is_virtual_iface(name: Any) -> bool:
+    return bool(_VIRTUAL_IFACE_RE.match(_text(name)))
+
+
 def normalize_mac(value: Any) -> str:
     raw = re.sub(r'[^0-9A-Fa-f]', '', _text(value))
     if len(raw) != 12:
@@ -55,6 +67,9 @@ def wazuh_payload_to_state(hostname: str, payload: dict, external_id: str = '') 
     host = normalize_hostname(os_item.get('hostname') or agent.get('name') or hostname)
     macs = []
     for iface in inv.get('netiface') or []:
+        # ignora interfaces virtuais (veth/tun/docker/...): MACs aleatorias de containers
+        if _is_virtual_iface(iface.get('name')):
+            continue
         mac = normalize_mac(iface.get('mac'))
         if mac and mac not in macs:
             macs.append(mac)
@@ -64,8 +79,17 @@ def wazuh_payload_to_state(hostname: str, payload: dict, external_id: str = '') 
         ips.append(aip)
     for addr in inv.get('netaddr') or []:
         ip = _text(addr.get('address'))
-        if ip and ip not in ips and ip not in ('127.0.0.1', '::1'):
-            ips.append(ip)
+        if not ip or ip in ips or ip in ('127.0.0.1', '::1'):
+            continue
+        # ignora IPs de bridges Docker (172.16-31.x) e link-local: nao sao o ativo,
+        # sao a rede interna do proprio host quando ele roda containers
+        if ip.startswith('172.') and any(ip.startswith(f'172.{o}.') for o in range(16, 32)):
+            continue
+        if ip.startswith('169.254.') or ip.lower().startswith('fe80:') or ip.lower().startswith('fc') or ip.lower().startswith('fd'):
+            continue
+        if _is_virtual_iface(addr.get('iface') if isinstance(addr, dict) else ''):
+            continue
+        ips.append(ip)
     raw_status = _text(agent.get('status')).lower() or 'unknown'
     network_status = 'reachable' if raw_status == 'active' else 'unknown'
     device_status = 'Ativo' if raw_status == 'active' else 'Inativo'
@@ -94,16 +118,34 @@ def wazuh_payload_to_state(hostname: str, payload: dict, external_id: str = '') 
 
 def netscope_device_to_state(device: dict) -> dict:
     primary_mac = normalize_mac(device.get('mac') or device.get('uid'))
+    # MACs de interfaces virtuais (veth/tun/docker) nao identificam o ativo
+    interfaces = list(device.get('interfaces') or [])
+    virtual_macs = set()
+    for nif in interfaces:
+        if _is_virtual_iface((nif or {}).get('name')):
+            vm = normalize_mac((nif or {}).get('mac'))
+            if vm: virtual_macs.add(vm)
     macs=[]
     for raw in [primary_mac] + list(device.get('macs') or []):
         mac=normalize_mac(raw)
-        if mac and mac not in macs:
+        if mac and mac not in macs and mac not in virtual_macs:
             macs.append(mac)
+    def _usable_ip(value: str) -> bool:
+        v=_text(value)
+        if not v or v in ('127.0.0.1','::1'):
+            return False
+        if v.startswith('172.') and any(v.startswith(f'172.{o}.') for o in range(16,32)):
+            return False  # bridges Docker
+        if v.startswith('169.254.') or v.lower().startswith(('fe80:','fc','fd')):
+            return False  # link-local / ULA
+        return True
     ip = _text(device.get('ip'))
+    if ip and not _usable_ip(ip):
+        ip = ''
     ips=[]
     for raw in [ip] + list(device.get('ips') or []):
         value=_text(raw)
-        if value and value not in ips:
+        if value and value not in ips and _usable_ip(value):
             ips.append(value)
     host = normalize_hostname(device.get('hostname') or device.get('dns_name'))
     online = _text(device.get('status')).lower() == 'online'

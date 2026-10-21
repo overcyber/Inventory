@@ -9,6 +9,7 @@ Inventory v0.18 — Rotas de configurações / MFA / relatório
 """
 from __future__ import annotations
 
+import os
 import threading
 from datetime import datetime
 from io import BytesIO
@@ -131,12 +132,20 @@ def settings():
     except Exception:
         pass
 
+    # API do Asset Core (integracoes maquina-a-maquina, ex.: Aegis SOAR).
+    # Token visivel apenas para admin na propria pagina de configuracao.
+    api_cfg = {
+        'token': (os.getenv('INVENTORY_INGEST_TOKEN') or '').strip(),
+        'scopes': 'ingest + read',
+    }
+
     return render_template('settings.html', machines=machines, users=users,
                            discovery=discovery, sync_seconds=sync_seconds,
                            source_catalog=source_catalog,
                            source_schedules=source_schedules,
                            assistant_cfg=assistant_cfg,
-                           auto_merge=auto_merge, notif_prefs=notif_prefs)
+                           auto_merge=auto_merge, notif_prefs=notif_prefs,
+                           api_cfg=api_cfg)
 
 
 @admin_required
