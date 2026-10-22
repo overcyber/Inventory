@@ -27,3 +27,4 @@ ssl/*.invalid.*
 .env.bak-*
 logs/*.log
 ssl/ca.pem
+logs/
